@@ -1,0 +1,6 @@
+fastapi
+python-dotenv
+uvicorn[standard]
+azure-identity>=1.17
+azure-servicebus>=7.12
+psycopg[binary]>=3.2

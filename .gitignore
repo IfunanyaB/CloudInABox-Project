@@ -1,0 +1,20 @@
+# Local secrets and environment files
+.env
+.env.*
+!.env.example
+
+# Python environments and generated files
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local portal data and generated research/provisioning outputs
+project_outputs/
+
+# Tenant-specific deployment inputs contain customer identifiers and contacts
+infrastructure/parameters/*.bicepparam
+infrastructure/parameters/*.generated.bicepparam
+infrastructure/parameters/network-allocations.json
+
+# macOS metadata
+.DS_Store

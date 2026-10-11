@@ -1,0 +1,48 @@
+targetScope = 'subscription'
+
+@description('System-assigned identity of the isolated queue worker.')
+param workerPrincipalId string
+
+@description('Stable worker resource name used for deterministic role assignment IDs.')
+param workerName string
+
+resource vendingOperatorRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
+  name: guid(subscription().id, 'CloudInABoxTenantVending')
+  properties: {
+    roleName: 'Cloud-in-a-Box Tenant Vending Operator'
+    description: 'Allows the isolated queue worker to deploy and remove tenant resource groups, VNets, workspaces, scoped policies, and tenant budgets. Does not grant role-assignment or general resource-provider permissions.'
+    type: 'CustomRole'
+    permissions: [{
+      actions: [
+        'Microsoft.Resources/subscriptions/read'
+        'Microsoft.Resources/subscriptions/resourceGroups/read'
+        'Microsoft.Resources/subscriptions/resourceGroups/write'
+        'Microsoft.Resources/subscriptions/resourceGroups/delete'
+        'Microsoft.Resources/deployments/*'
+        'Microsoft.Network/virtualNetworks/read'
+        'Microsoft.Network/virtualNetworks/write'
+        'Microsoft.Network/virtualNetworks/delete'
+        'Microsoft.OperationalInsights/workspaces/read'
+        'Microsoft.OperationalInsights/workspaces/write'
+        'Microsoft.OperationalInsights/workspaces/delete'
+        'Microsoft.Authorization/policyAssignments/read'
+        'Microsoft.Authorization/policyAssignments/write'
+        'Microsoft.Authorization/policyAssignments/delete'
+        'Microsoft.Consumption/budgets/read'
+        'Microsoft.Consumption/budgets/write'
+        'Microsoft.Consumption/budgets/delete'
+      ]
+      notActions: []
+    }]
+    assignableScopes: [subscription().id]
+  }
+}
+
+resource vendingWorkerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(subscription().id, workerName, 'CloudInABoxTenantVendingAssignment')
+  properties: {
+    roleDefinitionId: vendingOperatorRole.id
+    principalId: workerPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
