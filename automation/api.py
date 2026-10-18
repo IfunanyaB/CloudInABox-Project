@@ -23,6 +23,7 @@ from automation.tenant_vending import (
     PORTAL_LOCATION_OPTIONS,
     deprovision_tenant,
     vend_tenant,
+    verify_tenant_resources,
 )
 from automation.jobs import enqueue_job
 
@@ -191,7 +192,7 @@ def initialize_database() -> None:
             columns = {row["column_name"] for row in db_execute(connection, "SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='tenant_requests'").fetchall()}
         else:
             columns = {row["name"] for row in db_execute(connection, "PRAGMA table_info(tenant_requests)").fetchall()}
-        for column in ("customer_subject", "request_token_hash"):
+        for column in ("customer_subject", "request_token_hash", "verification_state", "verification_report"):
             if column not in columns:
                 db_execute(connection, f"ALTER TABLE tenant_requests ADD COLUMN {column} TEXT")
         db_execute(connection, f"""
@@ -235,6 +236,12 @@ def summarize_error(error: str | None) -> str | None:
 def row_to_record(row: sqlite3.Row) -> dict:
     record = dict(row)
     record["error_summary"] = summarize_error(record.get("error"))
+    report = record.get("verification_report")
+    if report:
+        try:
+            record["verification_report"] = json.loads(report)
+        except (TypeError, json.JSONDecodeError):
+            record["verification_report"] = None
     return record
 
 
@@ -257,9 +264,12 @@ def list_records() -> list[dict]:
 def store_record(record: dict) -> None:
     now = utc_now()
     record = {**record, "updated_at": now}
+    if isinstance(record.get("verification_report"), (dict, list)):
+        record["verification_report"] = json.dumps(record["verification_report"])
     columns = (
         "tenant_id", "tenant_name", "customer_subject", "request_token_hash", "status", "phase", "environment", "owner", "location",
         "monthly_budget", "subscription_id", "address_space", "deployment_name", "error",
+        "verification_state", "verification_report",
         "created_at", "updated_at",
     )
     with db_session() as connection:
@@ -340,6 +350,27 @@ def run_deprovisioning(tenant_id: str) -> None:
         append_history(tenant_id, "deprovision_failed", "deprovisioning", str(exc))
 
 
+def run_verification_job(tenant_id: str) -> None:
+    tenant = get_record(tenant_id)
+    if not tenant or tenant.get("verification_state") not in {"queued", "verifying"}:
+        return
+    store_record({**tenant, "verification_state": "verifying"})
+    append_history(tenant_id, tenant["status"], "verification", "Checking the tenant's resources directly in Azure Resource Manager.")
+    try:
+        report = verify_tenant_resources(tenant)
+        current = get_record(tenant_id) or tenant
+        store_record({**current, "verification_state": "complete" if report["all_passed"] else "failed",
+                      "verification_report": report})
+        result = f"Azure resource verification: {report['passed']} of {report['total']} checks passed."
+        append_history(tenant_id, current["status"], "verification", result)
+    except Exception as exc:
+        current = get_record(tenant_id) or tenant
+        report = {"verified_at": utc_now(), "subscription_id": tenant.get("subscription_id"),
+                  "tenant_id": tenant_id, "all_passed": False, "checks": [], "error": str(exc)}
+        store_record({**current, "verification_state": "failed", "verification_report": report})
+        append_history(tenant_id, current["status"], "verification", f"Azure resource verification failed: {exc}")
+
+
 def dispatch_job(action: str, tenant_id: str, background_tasks: BackgroundTasks, local_runner) -> None:
     try:
         enqueue_job(action, tenant_id, background_tasks, local_runner)
@@ -418,7 +449,11 @@ def startup() -> None:
 
 @app.get("/", include_in_schema=False)
 def home():
-    return FileResponse(PROJECT_ROOT / "index.html")
+    return FileResponse(PROJECT_ROOT / "index.html", headers={
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    })
 
 
 @app.get("/health")
@@ -461,14 +496,20 @@ def portal_config():
 def service_catalog():
     return {
         "included": [
-            {"id": "network", "name": "Isolated virtual network", "description": "Dedicated tenant VNet with application, data, and management subnets.", "source": "infrastructure/modules/networking.bicep"},
-            {"id": "monitoring", "name": "Log Analytics monitoring", "description": "Tenant-scoped workspace with 30-day retention.", "source": "infrastructure/modules/monitoring.bicep"},
-            {"id": "governance", "name": "Governance and tags", "description": "Tenant-scoped location, TenantId, and Environment policy assignments.", "source": "infrastructure/modules/governance.bicep"},
-            {"id": "budget", "name": "Monthly budget", "description": "Budget alerts scoped to this tenant's resource groups.", "source": "infrastructure/modules/finops.bicep"},
-            {"id": "resource-groups", "name": "Tenant resource groups", "description": "Separate network, app, data, and monitoring resource groups.", "source": "infrastructure/modules/tenant.bicep"},
+            {"id": "resource-groups", "name": "Tenant resource groups", "description": "Four isolated resource groups for network, app, data, and monitoring resources.", "details": "rg-{tenant}-network · rg-{tenant}-app · rg-{tenant}-data · rg-{tenant}-monitoring", "source": "infrastructure/modules/tenant.bicep"},
+            {"id": "network", "name": "Isolated virtual network", "description": "Dedicated tenant VNet in UK South.", "details": "VNet vnet-{tenant}; subnets snet-app, snet-data, and snet-management. Address ranges are allocated to avoid overlap.", "source": "infrastructure/modules/networking.bicep"},
+            {"id": "monitoring", "name": "Log Analytics workspace", "description": "Tenant-scoped Azure Monitor workspace.", "details": "Workspace law-{tenant} in the monitoring group, PerGB2018 pricing, 30-day retention.", "source": "infrastructure/modules/monitoring.bicep"},
+            {"id": "governance", "name": "Governance policies", "description": "Policies assigned to each of the four tenant resource groups.", "details": "Restricts location to UK South and requires matching TenantId and Environment=dev tags.", "source": "infrastructure/modules/governance.bicep"},
+            {"id": "budget", "name": "Monthly budget alerts", "description": "Cost alert filtered to this tenant's four resource groups.", "details": "Monthly threshold with alerts at 80% and 100%. Alerts notify; they do not stop spending.", "source": "infrastructure/modules/finops.bicep"},
         ],
-        "additional": [],
-        "additional_message": "Additional compute, database, storage, and application services are not defined in the current Bicep templates.",
+        "additional": [
+            {"id": "app-service", "name": "Azure App Service", "description": "Managed web application hosting.", "details": "App Service plan and web app are not in the deployed template; cannot currently be requested."},
+            {"id": "azure-sql", "name": "Azure SQL Database", "description": "Managed relational database.", "details": "SQL server, database, networking, and credentials are not provisioned by this project yet."},
+            {"id": "storage", "name": "Azure Storage Account", "description": "Blob and file storage.", "details": "Storage account and data protection settings are not provisioned by this project yet."},
+            {"id": "key-vault", "name": "Azure Key Vault", "description": "Tenant-scoped secret and key management.", "details": "Vault, access model, and private network configuration are not provisioned by this project yet."},
+            {"id": "container-apps", "name": "Azure Container Apps", "description": "Managed container application hosting.", "details": "Environment, registry integration, and app deployment are not provisioned by this project yet."},
+        ],
+        "additional_message": "These catalogue entries are visible for planning only. They cannot currently be selected or provisioned.",
         "actual_costs_available": False,
     }
 
@@ -497,6 +538,28 @@ def tenant_history(tenant_id: str, _: dict = Depends(require_admin)):
             (tenant_id,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+@app.post("/tenants/{tenant_id}/verify", status_code=202)
+def verify_tenant(tenant_id: str, background_tasks: BackgroundTasks, _: dict = Depends(require_admin)):
+    tenant = get_record(tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant request not found.")
+    if tenant.get("status") != "success":
+        raise HTTPException(status_code=409, detail="Only successfully provisioned tenants can be verified.")
+    if tenant.get("verification_state") in {"queued", "verifying"}:
+        raise HTTPException(status_code=409, detail="Azure verification is already in progress.")
+    store_record({**tenant, "verification_state": "queued", "verification_report": None})
+    append_history(tenant_id, tenant["status"], "verification", "Azure resource verification queued by an administrator.")
+    try:
+        enqueue_job("verify", tenant_id, background_tasks, run_verification_job)
+    except Exception as exc:
+        current = get_record(tenant_id) or tenant
+        store_record({**current, "verification_state": "failed",
+                      "verification_report": {"all_passed": False, "checks": [], "error": str(exc)}})
+        append_history(tenant_id, tenant["status"], "verification", f"Could not queue Azure verification: {exc}")
+        raise HTTPException(status_code=503, detail="Could not queue Azure verification. No Azure resources were changed.") from exc
+    return public_record(get_record(tenant_id))
 
 
 @app.get("/requests/{tenant_id}")

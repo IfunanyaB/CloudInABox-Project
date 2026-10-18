@@ -381,6 +381,91 @@ def deprovision_tenant(
             "removed_resource_groups": removed_groups, "removed_budget": has_budget}
 
 
+def verify_tenant_resources(tenant: dict[str, Any]) -> dict[str, Any]:
+    """Read the deployed baseline directly from Azure and return a verifiable report."""
+    tenant_id = str(tenant.get("tenant_id", ""))
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,38}[a-z0-9]", tenant_id):
+        raise ValueError("Invalid tenant ID; refusing to construct Azure resource IDs.")
+    subscription_id = str(tenant.get("subscription_id") or "")
+    configured = active_subscription_id()
+    if not subscription_id or configured != subscription_id:
+        raise RuntimeError("The active Azure subscription does not match this tenant's recorded subscription.")
+
+    from automation.arm_client import AzureArmClient
+    arm = AzureArmClient(subscription_id)
+    api_versions = {
+        "group": "2021-04-01",
+        "network": "2024-05-01",
+        "workspace": "2023-09-01",
+        "policy": "2025-03-01",
+        "budget": "2023-05-01",
+    }
+    checks: list[dict[str, Any]] = []
+
+    def get(resource_id: str, version_key: str) -> dict[str, Any] | None:
+        try:
+            _, body, _ = arm.request("GET", f"{resource_id}?api-version={api_versions[version_key]}")
+            return body
+        except RuntimeError as exc:
+            if "failed (404)" in str(exc):
+                return None
+            raise
+
+    groups = [f"rg-{tenant_id}-{suffix}" for suffix in ("network", "app", "data", "monitoring")]
+
+    def add_check(name: str, resource_id: str, expected: str, actual: Any, ok: bool, evidence: dict | None = None) -> None:
+        checks.append({"name": name, "resource_id": resource_id, "expected": expected,
+                       "actual": actual, "passed": bool(ok), "evidence": evidence or {}})
+
+    for group_name in groups:
+        path = f"/subscriptions/{subscription_id}/resourceGroups/{group_name}"
+        group = get(path, "group")
+        tags = (group or {}).get("tags") or {}
+        valid = bool(group and tags.get("TenantId") == tenant_id and tags.get("Project") == "CloudInABox")
+        add_check(f"Resource group {group_name}", path, "exists with matching tenant ownership tags",
+                  "missing" if not group else {"TenantId": tags.get("TenantId"), "Project": tags.get("Project")}, valid,
+                  {"location": (group or {}).get("location")})
+
+    vnet_id = f"/subscriptions/{subscription_id}/resourceGroups/rg-{tenant_id}-network/providers/Microsoft.Network/virtualNetworks/vnet-{tenant_id}"
+    vnet = get(vnet_id, "network")
+    subnet_names = sorted(item.get("name") for item in ((vnet or {}).get("properties") or {}).get("subnets", []))
+    expected_subnets = ["snet-app", "snet-data", "snet-management"]
+    add_check("Tenant virtual network", vnet_id, "exists with all three tenant subnets",
+              "missing" if not vnet else {"addressPrefixes": ((vnet.get("properties") or {}).get("addressSpace") or {}).get("addressPrefixes", []), "subnets": subnet_names},
+              bool(vnet and all(name in subnet_names for name in expected_subnets)))
+
+    workspace_id = f"/subscriptions/{subscription_id}/resourceGroups/rg-{tenant_id}-monitoring/providers/Microsoft.OperationalInsights/workspaces/law-{tenant_id}"
+    workspace = get(workspace_id, "workspace")
+    retention = ((workspace or {}).get("properties") or {}).get("retentionInDays")
+    add_check("Log Analytics workspace", workspace_id, "exists with 30-day retention",
+              "missing" if not workspace else {"retentionInDays": retention, "sku": ((workspace.get("properties") or {}).get("sku") or {}).get("name")},
+              bool(workspace and retention == 30))
+
+    policies = ["policy-allowed-locations", "policy-required-tenant-id", "policy-required-environment"]
+    for group_name in groups:
+        for policy_name in policies:
+            resource_id = f"/subscriptions/{subscription_id}/resourceGroups/{group_name}/providers/Microsoft.Authorization/policyAssignments/{policy_name}"
+            policy = get(resource_id, "policy")
+            add_check(f"Policy {policy_name} on {group_name}", resource_id, "assignment exists",
+                      "present" if policy else "missing", bool(policy),
+                      {"displayName": ((policy or {}).get("properties") or {}).get("displayName")})
+
+    budget_id = f"/subscriptions/{subscription_id}/providers/Microsoft.Consumption/budgets/budget-{tenant_id}"
+    budget = get(budget_id, "budget")
+    budget_properties = (budget or {}).get("properties") or {}
+    dimensions = ((budget_properties.get("filter") or {}).get("dimensions") or {})
+    budget_groups = set(dimensions.get("values") or [])
+    add_check("Tenant monthly budget", budget_id, "budget exists and filters to the four tenant resource groups",
+              "missing" if not budget else {"amount": budget_properties.get("amount"), "timeGrain": budget_properties.get("timeGrain"), "resourceGroups": sorted(budget_groups)},
+              bool(budget and set(groups).issubset(budget_groups)))
+
+    passed = sum(1 for check in checks if check["passed"])
+    return {"verified_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "subscription_id": subscription_id, "tenant_id": tenant_id,
+            "passed": passed, "total": len(checks), "all_passed": passed == len(checks),
+            "checks": checks}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Provision isolated tenants in the active Azure subscription.")
     parser.add_argument("--tenant-id", default="tenant-b")

@@ -13,6 +13,23 @@
     @media(max-width:850px){.shell{grid-template-columns:1fr}aside{padding:12px;gap:12px}.brand{padding:5px 8px 12px}.portal-switch{max-width:420px}.nav-group{display:flex;flex-wrap:wrap;align-items:center}.nav-label{width:100%}.nav-item{padding:8px 9px;font-size:12px}.side-note{display:none}.top{height:60px;padding:0 16px}.page{padding:23px 16px 40px}.metrics{grid-template-columns:repeat(2,1fr)}.two-col{grid-template-columns:1fr}}
     @media(max-width:560px){.page h1{font-size:23px}.page-head{display:block}.metrics{gap:9px}.metric{padding:14px}.metric-value{font-size:23px}.form-grid,.detail-grid{grid-template-columns:1fr}.field.full{grid-column:auto}.table th:nth-child(3),.table td:nth-child(3){display:none}}
   </style>
+  <style>
+    @media(min-width:851px){.shell{align-items:start}aside{position:sticky;top:0;height:100vh;overflow-y:auto}main{min-height:100vh}}
+    .portal-switch,.portal-switch button,.metric,.card,.btn,.field input,.field select,.notice,.empty{border-radius:5px}
+    .portal-switch button:disabled{opacity:.48;cursor:not-allowed}
+    .metric,.card{border-radius:7px;box-shadow:0 3px 14px rgba(30,50,80,.035)}
+    .service-list{display:grid;gap:12px;padding-left:20px;margin:0}
+    .service-list li{padding-left:3px}.service-list strong{display:block}
+    .service-details,.service-source{display:block;color:var(--muted);font-size:12px;line-height:1.45;margin-top:3px}
+    .service-source{font-family:ui-monospace,monospace;font-size:10px;overflow-wrap:anywhere}
+    .service-unavailable{color:var(--muted)}
+    .info-tip{display:inline-grid;place-items:center;border:1px solid #b9c5b7;border-radius:50%;width:16px;height:16px;font-size:10px;cursor:help;margin-left:5px}
+    .expanded-row td{background:#faf9f2;padding:16px}.expanded-details{border-left:2px solid #8baa8c;padding-left:15px}
+    .history-table td,.history-table th{padding:9px}.report-table td:first-child{min-width:190px}.report-table td:nth-child(2){min-width:155px}
+    dialog{border:1px solid var(--line);border-radius:7px;max-width:480px;width:calc(100% - 32px);padding:24px;color:inherit;background:var(--surface);box-shadow:0 18px 60px #0003}
+    dialog::backdrop{background:#18231dcc}dialog h2{margin:0 0 8px;font-size:19px}dialog p{line-height:1.5;color:var(--muted)}
+    @media(max-width:850px){aside{position:static;height:auto;overflow:visible}.side-note{display:none}}
+  </style>
 </head>
 <body>
   <div class="shell">
@@ -20,7 +37,7 @@
       <div class="brand"><div class="brand-mark">Cloud-in-a-Box</div><div class="brand-sub">Azure self-service platform</div></div>
       <div class="portal-switch" aria-label="Portal experience">
         <button id="customerMode" aria-pressed="true" type="button">Customer</button>
-        <button id="adminMode" aria-pressed="false" type="button" hidden>Admin</button>
+        <button id="adminMode" aria-pressed="false" type="button" disabled title="Admin sign-in required">Admin</button>
       </div>
       <nav class="nav-group" id="customerNav" aria-label="Customer navigation">
         <div class="nav-label">Customer portal</div>
@@ -43,7 +60,7 @@
 
       <section class="page active" id="page-request">
         <div class="page-head"><div><div class="eyebrow">Customer portal</div><h1>Request a cloud environment</h1><p class="lead">Request a tenant-isolated Azure environment. No account is needed. Save the private request token to return and check status or history.</p></div></div>
-        <div class="grid two-col">
+        <div class="grid">
           <div class="card">
             <h2>Environment details</h2><p class="card-sub">Your request is provisioned in the active Azure subscription with its own resource groups and virtual network.</p>
             <form id="tenantForm">
@@ -58,7 +75,6 @@
             </form>
             <div id="requestFeedback" class="hidden" aria-live="polite"></div>
           </div>
-          <div class="card"><h2>Included by default</h2><p class="card-sub">These are the services the current Bicep templates actually provision.</p><div id="includedServices" class="grid"></div></div>
         </div>
       </section>
 
@@ -70,8 +86,8 @@
 
       <section class="page" id="page-services">
         <div class="page-head"><div><div class="eyebrow">Service catalogue</div><h1>Available services</h1><p class="lead">The catalogue is read from the backend’s supported-service response.</p></div></div>
-        <div class="card"><h2>Included services</h2><p class="card-sub">Provisioned with each tenant environment.</p><div id="catalogIncluded" class="grid service-grid"></div></div>
-        <div class="card"><h2>Additional services</h2><p id="additionalMessage" class="card-sub"></p><div id="catalogAdditional" class="grid service-grid"></div></div>
+        <div class="card"><h2>Included services</h2><p class="card-sub">The baseline provisioned for each tenant. Resource details come from the active deployment template.</p><ul id="catalogIncluded" class="service-list"></ul></div>
+        <div class="card"><h2>Additional services</h2><p id="additionalMessage" class="card-sub"></p><ul id="catalogAdditional" class="service-list"></ul></div>
       </section>
 
       <section class="page" id="page-finops">
@@ -82,7 +98,7 @@
 
       <section class="page" id="page-account">
         <div class="page-head"><div><div class="eyebrow">Request access</div><h1>Request privacy</h1><p class="lead">No customer account is needed. Each request has a private access token that grants access to its status and history.</p></div></div>
-        <div class="card"><h2>Administrator sign-in</h2><p class="card-sub">Customers do not use this key. Run this command in macOS Terminal, then paste only the secret value it prints into the field below. Do not paste the command itself or the shell prompt.</p><p class="notice"><code>az keyvault secret show --vault-name cibkvwcrzymyb --name portal-admin-key --query value -o tsv</code></p><form id="adminLoginForm"><div class="field"><label for="adminKeyInput">Administrator key (the command’s output)</label><input id="adminKeyInput" type="password" required minlength="32" autocomplete="current-password"></div><div class="actions"><button id="adminLoginButton" class="btn secondary" type="submit">Open admin portal</button></div></form><p id="adminLoginFeedback" class="hint" aria-live="polite"></p><button id="adminLogoutButton" class="btn link" type="button" hidden>Sign out of admin portal</button></div>
+        <div class="card"><h2>Administrator sign-in</h2><p class="card-sub">Administrator access is restricted to trusted testers. The key is not displayed or copied on this public page.</p><ol class="key-steps"><li>Ask the platform owner to share the admin key with you privately, or ask them to retrieve it from the Azure portal’s Key Vault secret page.</li><li>If you have Azure CLI and permission to read the secret, run this command in Terminal:</li></ol><p class="notice"><code id="adminKeyCommand">az keyvault secret show --vault-name cibkvwcrzymyb --name portal-admin-key --query value -o tsv</code> <button id="copyAdminCommand" class="btn link" type="button">Copy command</button></p><form id="adminLoginForm"><div class="field"><label for="adminKeyInput">Administrator key (the command’s output)</label><input id="adminKeyInput" type="password" required minlength="32" autocomplete="current-password"></div><div class="actions"><button id="adminLoginButton" class="btn secondary" type="submit">Open admin portal</button></div></form><p id="adminLoginFeedback" class="hint" aria-live="polite"></p><button id="adminLogoutButton" class="btn link" type="button" hidden>Sign out of admin portal</button></div>
       </section>
 
       <section class="page" id="page-admin-dashboard">
@@ -99,13 +115,13 @@
       <section class="page" id="page-tenants">
         <div class="page-head"><div><div class="eyebrow">Administrator portal</div><h1>Tenants and requests</h1><p class="lead">Select a tenant to inspect its request, deployment status, budget, and service resources.</p></div><div class="toolbar"><button class="btn secondary" id="adminRefresh">Refresh</button></div></div>
         <div class="card"><div id="adminTenantTable"></div></div>
-        <div class="card hidden" id="tenantDetailsCard"><div class="page-head"><div><div class="eyebrow">Tenant details</div><h2 id="detailTitle"></h2></div><button class="btn link" id="closeDetails">Close</button></div><div id="tenantDetails"></div></div>
       </section>
     </main>
   </div>
+  <dialog id="confirmDialog" aria-labelledby="confirmTitle"><form method="dialog" id="confirmForm"><h2 id="confirmTitle">Confirm action</h2><p id="confirmMessage"></p><div id="confirmInputWrap" class="field hidden"><label id="confirmInputLabel" for="confirmInput">Confirmation</label><input id="confirmInput" autocomplete="off"></div><div class="actions"><button class="btn secondary" value="cancel">Cancel</button><button class="btn danger" id="confirmAccept" value="confirm">Continue</button></div></form></dialog>
 
   <script>
-    const state = { config: null, catalog: null, tenants: [], publicRequests: [], auth: null, adminKey: sessionStorage.getItem("cloudinabox.adminKey") || "", currentPage: "request", mode: "customer", busy: false };
+    const state = { config: null, catalog: null, tenants: [], publicRequests: [], auth: null, adminKey: sessionStorage.getItem("cloudinabox.adminKey") || "", currentPage: "request", mode: "customer", busy: false, expandedTenantId: null };
     const $ = id => document.getElementById(id);
     const requestStorageKey = "cloudinabox.privateRequests";
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
@@ -113,7 +129,7 @@
 
     async function api(path, options = {}) {
       const headers={"Content-Type":"application/json",...(state.adminKey?{"X-Portal-Admin-Key":state.adminKey}:{}),...(options.headers||{})};
-      const response = await fetch(path, {...options,headers});
+      const response = await fetch(path, {...options,headers,cache:"no-store"});
       const data = response.status === 204 ? null : await response.json().catch(() => ({}));
       if (!response.ok) { const error = new Error(data?.detail || `Request failed (${response.status})`); error.status = response.status; throw error; }
       return data;
@@ -159,16 +175,20 @@
       if (/policy-required-environment|environment tag/i.test(error)) return "The selected environment is blocked by subscription policy. Development is currently allowed.";
       return error || "No error details were returned.";
     }
-    function serviceCard(service) {
-      return `<article class="service"><div class="service-icon" aria-hidden="true">${escapeHtml((service.name || "S").slice(0,1))}</div><h3>${escapeHtml(service.name)}</h3><p>${escapeHtml(service.description)}</p>${service.source ? `<span class="source">${escapeHtml(service.source)}</span>` : ""}</article>`;
+    function serviceLine(service, available) {
+      const unavailable = available ? "" : `<span class="info-tip" tabindex="0" title="This service cannot currently be provisioned or added. Please contact an administrator." aria-label="This service cannot currently be provisioned or added. Please contact an administrator.">i</span>`;
+      return `<li class="${available ? "" : "service-unavailable"}"><strong>${escapeHtml(service.name)}${unavailable}</strong><span>${escapeHtml(service.description)}</span><span class="service-details">${escapeHtml(service.details || "")}</span>${service.source ? `<span class="service-source">Template: ${escapeHtml(service.source)}</span>` : ""}</li>`;
+    }
+    function historyTable(events) {
+      return `<div class="table-wrap"><table class="table history-table"><thead><tr><th>Date and time</th><th>Stage</th><th>Status</th><th>Details</th></tr></thead><tbody>${events.map(event=>`<tr><td>${escapeHtml(event.created_at)}</td><td>${escapeHtml(event.phase)}</td><td>${statusPill(event.status)}</td><td>${escapeHtml(event.message)}</td></tr>`).join("")}</tbody></table></div>`;
     }
 
     function setMode(mode) {
       state.mode = mode;
       $("customerMode").setAttribute("aria-pressed", String(mode === "customer"));
       $("adminMode").setAttribute("aria-pressed", String(mode === "admin"));
-      $("customerNav").hidden = mode !== "customer";
-      $("adminNav").hidden = mode !== "admin";
+      $("customerNav").hidden = false;
+      $("adminNav").hidden = !state.auth?.is_admin;
       const page = mode === "customer" ? "request" : "admin-dashboard";
       showPage(page);
     }
@@ -200,7 +220,10 @@
         await refreshPublicRequests();
         $("apiSignal").className = "signal online"; $("apiText").textContent = "Portal API connected";
         $("authLink").href = "#page-account";
-        $("adminMode").hidden = !state.auth.is_admin;
+        $("adminMode").disabled = !state.auth.is_admin;
+        $("adminMode").title = state.auth.is_admin ? "Open administrator portal" : "Admin sign-in required";
+        $("customerNav").hidden = false;
+        $("adminNav").hidden = !state.auth.is_admin;
         $("authLink").textContent = state.auth.authenticated ? "Admin sign out" : "Admin sign in";
         $("identityNoteTitle").textContent = state.auth.is_admin ? "Administrator access" : "Public request portal";
         $("identityNote").textContent = state.auth.is_admin ? "You can review and manage all tenant requests." : "Submit without an account. Keep each private request token safe.";
@@ -216,10 +239,9 @@
         fillOptions($("azureRegion"), state.config.locations);
         $("environmentHint").textContent = state.config.environments.find(x => !x.enabled)?.reason || "";
         $("regionHint").textContent = state.config.locations.find(x => !x.enabled)?.reason || "";
-        $("includedServices").innerHTML = state.catalog.included.map(serviceCard).join("");
-        $("catalogIncluded").innerHTML = state.catalog.included.map(serviceCard).join("");
+        $("catalogIncluded").innerHTML = state.catalog.included.map(service => serviceLine(service,true)).join("");
         $("additionalMessage").textContent = state.catalog.additional_message;
-        $("catalogAdditional").innerHTML = state.catalog.additional.length ? state.catalog.additional.map(serviceCard).join("") : `<div class="empty">No additional services are currently provisioned by the Bicep templates.</div>`;
+        $("catalogAdditional").innerHTML = state.catalog.additional.map(service => serviceLine(service,false)).join("");
         renderAll();
       } catch (error) {
         $("apiSignal").className = "signal offline"; $("apiText").textContent = "Portal API unavailable";
@@ -231,7 +253,7 @@
         if (state.auth?.is_admin) state.tenants = await api("/tenants");
         else await refreshPublicRequests();
       renderAll();
-      if (state.tenants.some(t => ["provisioning", "deprovisioning"].includes(t.status))) window.setTimeout(refreshTenants, 1800);
+      if (state.tenants.some(t => ["provisioning", "deprovisioning"].includes(t.status) || ["queued", "verifying"].includes(t.verification_state))) window.setTimeout(refreshTenants, 1800);
     }
     function renderAll() { renderDashboard(); renderAdminTenants(); renderMyTenants(); renderFinops(); renderRequestProgress(); }
     function renderRequestProgress() {
@@ -240,7 +262,7 @@
       if (!tenant || mount.classList.contains("error")) return;
       mount.className = tenant.status === "failed" ? "notice error" : "notice";
       const progressClass = tenant.status === "success" ? "complete" : (tenant.phase || "");
-      mount.innerHTML = `Request <strong>${escapeHtml(tenant.tenant_name || tenant.tenant_id)}</strong> · ${statusPill(tenant.status)} <span>${escapeHtml(tenant.phase || "")}</span><div class="progress ${escapeHtml(progressClass)}"><span></span></div><p>Reference: <code>${escapeHtml(tenant.tenant_id)}</code></p>${tenant.request_token ? `<p>Private access token (save it to check this request later): <code>${escapeHtml(tenant.request_token)}</code></p>` : ""}${tenant.status === "failed" ? `<p>${escapeHtml(friendlyError(tenant))}</p>` : `<span class="hint">Status refreshes automatically while Azure provisioning is in progress.</span>`}`;
+      mount.innerHTML = `Request <strong>${escapeHtml(tenant.tenant_name || tenant.tenant_id)}</strong> · ${statusPill(tenant.status)} ${["success","failed","deprovisioned"].includes(tenant.status)?"":`<span>${escapeHtml(tenant.phase || "")}</span>`}<div class="progress ${escapeHtml(progressClass)}"><span></span></div><p>Reference: <code>${escapeHtml(tenant.tenant_id)}</code></p>${tenant.request_token ? `<p>Private access token (save it to check this request later): <code>${escapeHtml(tenant.request_token)}</code></p>` : ""}${tenant.status === "failed" ? `<p>${escapeHtml(friendlyError(tenant))}</p>` : `<span class="hint">Status refreshes automatically while Azure provisioning is in progress.</span>`}`;
     }
     function renderDashboard() {
       const counts = {total:state.tenants.length,active:0,provisioning:0,failed:0};
@@ -249,19 +271,24 @@
       $("metricProvisioning").textContent = counts.provisioning; $("metricFailed").textContent = counts.failed;
       const recent = [...state.tenants].slice(0,6);
       $("adminRecent").innerHTML = recent.length ? renderTenantTable(recent, false) : `<div class="empty">No tenant requests have been recorded yet.</div>`;
-      $("adminRecent").querySelectorAll("[data-detail]").forEach(button => button.addEventListener("click", () => { showPage("tenants"); showDetails(button.dataset.detail); }));
+      $("adminRecent").querySelectorAll("[data-detail]").forEach(button => button.addEventListener("click", () => { state.expandedTenantId=button.dataset.detail; showPage("tenants"); renderAdminTenants(); }));
     }
     function renderTenantTable(tenants, admin) {
-      return `<div class="table-wrap"><table class="table"><thead><tr><th>Tenant</th><th>Status</th><th>Environment / region</th><th>Budget</th>${admin ? "<th>Action</th>" : ""}</tr></thead><tbody>${tenants.map(t => `<tr><td><button class="tenant-link" data-detail="${escapeHtml(t.tenant_id)}">${escapeHtml(t.tenant_name || t.tenant_id)}</button><div class="mono muted">${escapeHtml(t.tenant_id)}</div></td><td>${statusPill(t.status)}<div class="hint">${escapeHtml(t.phase || "")}</div></td><td>${escapeHtml(t.environment || "Not retained")} · ${escapeHtml(t.location || "Not retained")}</td><td>${formatMoney(t.monthly_budget)}</td>${admin ? `<td><button class="btn link" data-detail="${escapeHtml(t.tenant_id)}">Details</button></td>` : ""}</tr>`).join("")}</tbody></table></div>`;
+      return `<div class="table-wrap"><table class="table"><thead><tr><th>Tenant</th><th>Status</th><th>Environment / region</th><th>Budget</th>${admin ? "<th>Action</th>" : ""}</tr></thead><tbody>${tenants.map(t => `<tr><td><button class="tenant-link" aria-expanded="${admin && state.expandedTenantId===t.tenant_id}" data-detail="${escapeHtml(t.tenant_id)}">${escapeHtml(t.tenant_name || t.tenant_id)}</button><div class="mono muted">${escapeHtml(t.tenant_id)}</div></td><td>${statusPill(t.status)}</td><td>${escapeHtml(t.environment || "Not retained")} · ${escapeHtml(t.location || "Not retained")}</td><td>${formatMoney(t.monthly_budget)}</td>${admin ? `<td><button class="btn link" data-detail="${escapeHtml(t.tenant_id)}">${state.expandedTenantId===t.tenant_id ? "Hide details" : "Details"}</button></td>` : ""}</tr>${admin && state.expandedTenantId===t.tenant_id ? `<tr class="expanded-row"><td colspan="5"><div class="expanded-details" id="detailsMount-${escapeHtml(t.tenant_id)}"><span class="muted">Loading tenant details…</span></div></td></tr>` : ""}`).join("")}</tbody></table></div>`;
     }
     function renderAdminTenants() {
       const mount = $("adminTenantTable"); if (!mount) return;
       mount.innerHTML = state.tenants.length ? renderTenantTable(state.tenants, true) : `<div class="empty">No tenant requests have been recorded yet.</div>`;
-      mount.querySelectorAll("[data-detail]").forEach(button => button.addEventListener("click", () => showDetails(button.dataset.detail)));
+      mount.querySelectorAll("[data-detail]").forEach(button => button.addEventListener("click", () => {
+        const id=button.dataset.detail;
+        state.expandedTenantId=state.expandedTenantId===id?null:id;
+        renderAdminTenants();
+      }));
+      if(state.expandedTenantId && state.tenants.some(t=>t.tenant_id===state.expandedTenantId)) showDetails(state.expandedTenantId);
     }
     function renderMyTenants() {
       const mine = state.publicRequests;
-      $("myTenants").innerHTML = mine.length ? mine.map(t => `<article class="card"><div class="page-head"><div><h2>${escapeHtml(t.tenant_name || t.tenant_id)}</h2><p class="card-sub mono">Reference ${escapeHtml(t.tenant_id)}</p></div>${statusPill(t.status)}</div><div class="detail-grid">${detailItem("Phase",t.phase)}${detailItem("Region",t.location)}${detailItem("Environment",t.environment)}${detailItem("Monthly budget",formatMoney(t.monthly_budget))}</div><p class="footer-note">Private token: <code>${escapeHtml(t.request_token || "Enter the token to track this request")}</code></p>${t.status === "failed" ? `<div class="notice error">${escapeHtml(friendlyError(t))}</div><button class="btn secondary" data-public-retry="${escapeHtml(t.tenant_id)}">Retry request</button>` : ""}<h3>Request history</h3>${(t.history || []).map(event => `<div class="detail-item"><div class="detail-key">${escapeHtml(event.created_at)} · ${escapeHtml(event.phase)}</div><div class="detail-value">${escapeHtml(event.message)}</div></div>`).join("")}</article>`).join("") : `<div class="empty">No saved requests in this browser session. Use the private reference and token to track a request.</div>`;
+      $("myTenants").innerHTML = mine.length ? mine.map(t => `<article class="card"><div class="page-head"><div><h2>${escapeHtml(t.tenant_name || t.tenant_id)}</h2><p class="card-sub mono">Reference ${escapeHtml(t.tenant_id)}</p></div>${statusPill(t.status)}</div><div class="detail-grid">${["success","failed","deprovisioned"].includes(t.status)?"":detailItem("Phase",t.phase)}${detailItem("Region",t.location)}${detailItem("Environment",t.environment)}${detailItem("Monthly budget",formatMoney(t.monthly_budget))}</div><p class="footer-note">Private token: <code>${escapeHtml(t.request_token || "Enter the token to track this request")}</code></p>${t.status === "failed" ? `<div class="notice error">${escapeHtml(friendlyError(t))}</div><button class="btn secondary" data-public-retry="${escapeHtml(t.tenant_id)}">Retry request</button>` : ""}<h3>Request history</h3>${(t.history || []).length ? historyTable(t.history) : `<p class="footer-note">No history available.</p>`}</article>`).join("") : `<div class="empty">No saved requests in this browser session. Use the private reference and token to track a request.</div>`;
       $("myTenants").querySelectorAll("[data-public-retry]").forEach(button => button.addEventListener("click", () => retryPublicRequest(button.dataset.publicRetry)));
     }
     function renderFinops() {
@@ -269,41 +296,65 @@
       $("customerFinops").innerHTML = mine.length ? mine.map(t => `<article class="card"><div class="page-head"><div><h2>${escapeHtml(t.tenant_name || t.tenant_id)}</h2><p class="card-sub">Budget filtered to this tenant’s resource groups</p></div>${statusPill(t.status)}</div><div class="metric-label">Monthly budget</div><div class="metric-value">${formatMoney(t.monthly_budget)}</div><p class="footer-note">Current spend and remaining balance are unavailable because Cost Management data is not exposed by the API.</p></article>`).join("") : `<div class="empty">No saved request budget is available in this browser session.</div>`;
     }
     function detailItem(label,value) { return `<div class="detail-item"><div class="detail-key">${escapeHtml(label)}</div><div class="detail-value">${escapeHtml(value || "Not recorded")}</div></div>`; }
+    function verificationMarkup(tenant) {
+      const report=tenant.verification_report;
+      if (!tenant.verification_state) return "";
+      if (["queued","verifying"].includes(tenant.verification_state)) return `<div class="notice">Azure resource verification is ${escapeHtml(tenant.verification_state)}. This report refreshes automatically.</div>`;
+      if (!report) return `<div class="notice warn">Azure verification ${escapeHtml(tenant.verification_state)}. No report was returned.</div>`;
+      const rows=(report.checks||[]).map(check=>`<tr><td>${escapeHtml(check.name)}</td><td>${check.passed?"Passed":"Not verified"}</td><td>${escapeHtml(check.expected)}</td><td>${escapeHtml(JSON.stringify(check.actual))}</td><td class="mono">${escapeHtml(check.resource_id)}</td></tr>`).join("");
+      return `<section><h3>Azure resource verification</h3><p class="card-sub">Checked ${escapeHtml(report.verified_at||"time not recorded")} · ${escapeHtml(report.passed??0)} of ${escapeHtml(report.total??(report.checks||[]).length)} checks passed · Subscription ${escapeHtml(report.subscription_id||tenant.subscription_id||"unknown")}</p>${report.error?`<div class="notice error">${escapeHtml(report.error)}</div>`:""}${rows?`<div class="table-wrap"><table class="table report-table"><thead><tr><th>Azure resource</th><th>Result</th><th>Expected</th><th>Observed</th><th>Resource ID</th></tr></thead><tbody>${rows}</tbody></table></div>`:""}</section>`;
+    }
     async function showDetails(id) {
       const t = state.tenants.find(item => item.tenant_id === id); if (!t) return;
-      $("tenantDetailsCard").classList.remove("hidden"); $("detailTitle").textContent = t.tenant_name || t.tenant_id;
-      const basic = `<div class="detail-grid">${detailItem("Tenant ID",t.tenant_id)}${detailItem("Status",t.status)}${detailItem("Provisioning phase",t.phase)}${detailItem("Contact",t.owner)}${detailItem("Environment",t.environment)}${detailItem("Azure region",t.location)}${detailItem("Subscription",t.subscription_id)}${detailItem("VNet address range",t.address_space)}${detailItem("Monthly budget",formatMoney(t.monthly_budget))}${detailItem("Created",t.created_at)}${detailItem("Deployment",t.deployment_name)}</div>`;
-      const result = t.status === "success" ? `<div class="notice">Azure reports that the deployment succeeded. Included baseline: ${(state.catalog?.included || []).map(service => escapeHtml(service.name)).join(" · ")}</div>` : "";
+      const mount=$(`detailsMount-${id}`); if (!mount) return;
+      const basic = `<div class="detail-grid">${detailItem("Tenant ID",t.tenant_id)}${detailItem("Status",t.status)}${detailItem("Contact",t.owner)}${detailItem("Environment",t.environment)}${detailItem("Azure region",t.location)}${detailItem("Subscription",t.subscription_id)}${detailItem("VNet address range",t.address_space)}${detailItem("Monthly budget alert",formatMoney(t.monthly_budget))}${detailItem("Created",t.created_at)}${detailItem("Deployment",t.deployment_name)}</div>`;
       const hasRetryInputs = [t.tenant_name,t.environment,t.owner,t.location,t.monthly_budget].every(value => value != null);
-      const failure = t.status === "failed" ? `<div class="notice error"><strong>${escapeHtml(friendlyError(t))}</strong></div><details><summary>Provisioning error details</summary><pre class="error-detail">${escapeHtml(t.error || "No raw error was retained.")}</pre></details><div class="actions">${hasRetryInputs ? `<button class="btn" data-retry="${escapeHtml(t.tenant_id)}">Retry provisioning</button>` : ""}${t.subscription_id ? "" : `<button class="btn danger" data-remove="${escapeHtml(t.tenant_id)}">Remove failed request record</button>`}</div>${hasRetryInputs ? "" : `<p class="footer-note">The original form values were not retained for this older request, so it cannot be retried safely. Submit it again using the currently enabled options.</p>`}${t.subscription_id ? "" : `<p class="footer-note">Removing this historical request record does not delete Azure resources.</p>`}` : "";
+      const failure = t.status === "failed" ? `<div class="notice error"><strong>${escapeHtml(friendlyError(t))}</strong></div><details><summary>Provisioning error details</summary><pre class="error-detail">${escapeHtml(t.error || "No raw error was retained.")}</pre></details><div class="actions">${hasRetryInputs ? `<button class="btn" data-retry="${escapeHtml(t.tenant_id)}">Retry provisioning</button>` : ""}${t.subscription_id ? "" : `<button class="btn danger" data-remove="${escapeHtml(t.tenant_id)}">Remove failed request record</button>`}</div>${hasRetryInputs ? "" : `<p class="footer-note">Original form values are unavailable, so this older request cannot be retried safely.</p>`}` : "";
       const deprovision = ["success", "failed", "deprovision_failed"].includes(t.status) && t.subscription_id ? `<div class="notice warn"><strong>${t.status === "failed" ? "Clean up any partial resources?" : "Deprovision this tenant?"}</strong> This permanently deletes its tenant resource groups and monthly budget. The operation checks the recorded subscription and ownership tags before deleting.</div><div class="actions"><button class="btn danger" data-deprovision="${escapeHtml(t.tenant_id)}">${t.status === "deprovision_failed" ? "Retry deprovisioning" : t.status === "failed" ? "Clean up tenant resources" : "Deprovision tenant"}</button></div>` : "";
       const deprovisioned = t.status === "deprovisioned" ? `<div class="notice">This tenant’s Azure resource groups and budget have been removed. The portal record and operation history are retained.</div>` : "";
-      let history = [];
-      try { history = await api(`/tenants/${encodeURIComponent(id)}/history`); } catch {}
-      const events = history.length ? `<h3>Provisioning history</h3><div class="history">${history.map(event => `<div class="detail-item"><div class="detail-key">${escapeHtml(event.created_at)} · ${escapeHtml(event.phase)}</div><div class="detail-value">${escapeHtml(event.message)}</div></div>`).join("")}</div>` : `<h3>Provisioning history</h3><p class="footer-note">No history was retained for this older request.</p>`;
-      $("tenantDetails").innerHTML = basic + result + failure + deprovision + deprovisioned + events;
-      $("tenantDetails").querySelector("[data-retry]")?.addEventListener("click", () => retryTenant(id));
-      $("tenantDetails").querySelector("[data-remove]")?.addEventListener("click", () => removeFailed(id));
-      $("tenantDetails").querySelector("[data-deprovision]")?.addEventListener("click", () => deprovisionTenant(id));
-      $("tenantDetailsCard").scrollIntoView({behavior:"smooth",block:"start"});
+      const verificationButton = t.status === "success" ? `<div class="actions"><button class="btn secondary" data-verify="${escapeHtml(t.tenant_id)}" ${["queued","verifying"].includes(t.verification_state)?"disabled":""}>${t.verification_state==="complete"?"Verify resources again":"Verify actual Azure resources"}</button></div>${verificationMarkup(t)}` : "";
+      let history=[];
+      try { history=await api(`/tenants/${encodeURIComponent(id)}/history`); } catch {}
+      if (!$(`detailsMount-${id}`)) return;
+      mount.innerHTML = basic + failure + deprovision + deprovisioned + verificationButton + (history.length ? `<h3>Provisioning history</h3>${historyTable(history)}` : `<h3>Provisioning history</h3><p class="footer-note">No history was retained for this request.</p>`);
+      mount.querySelector("[data-retry]")?.addEventListener("click", () => retryTenant(id));
+      mount.querySelector("[data-remove]")?.addEventListener("click", () => removeFailed(id));
+      mount.querySelector("[data-deprovision]")?.addEventListener("click", () => deprovisionTenant(id));
+      mount.querySelector("[data-verify]")?.addEventListener("click", () => verifyTenant(id));
+    }
+    async function appConfirm({title,message,requiredText="",inputLabel="Type the tenant ID to confirm"}) {
+      const dialog=$("confirmDialog"), input=$("confirmInput"), wrap=$("confirmInputWrap"), accept=$("confirmAccept");
+      $("confirmTitle").textContent=title; $("confirmMessage").textContent=message;
+      wrap.classList.toggle("hidden",!requiredText); input.required=Boolean(requiredText); input.value=""; input.placeholder=requiredText;
+      $("confirmInputLabel").textContent=inputLabel; accept.disabled=false;
+      dialog.showModal(); if(requiredText) input.focus();
+      return new Promise(resolve=>{
+        const close=()=>{dialog.removeEventListener("close",close);resolve(dialog.returnValue==="confirm")};
+        dialog.addEventListener("close",close);
+        accept.onclick=event=>{event.preventDefault();if(requiredText&&input.value.trim()!==requiredText){input.setCustomValidity("Enter the exact tenant ID to continue.");input.reportValidity();return}input.setCustomValidity("");dialog.close("confirm")};
+      });
+    }
+    async function verifyTenant(id) {
+      const button=$(`detailsMount-${id}`)?.querySelector("[data-verify]"); if(button) button.disabled=true;
+      try { await api(`/tenants/${encodeURIComponent(id)}/verify`,{method:"POST"}); state.expandedTenantId=id; await refreshTenants(); }
+      catch(error) { if(button)button.disabled=false; alert(error.message); }
     }
     async function retryTenant(id) {
-      const button = $("tenantDetails").querySelector("[data-retry]"); if (button) button.disabled = true;
-      try { const record = await api(`/tenants/${encodeURIComponent(id)}/retry`,{method:"POST"}); await refreshTenants(); showDetails(id); }
+      const button = $(`detailsMount-${id}`)?.querySelector("[data-retry]"); if (button) button.disabled = true;
+      try { state.expandedTenantId=id; await api(`/tenants/${encodeURIComponent(id)}/retry`,{method:"POST"}); await refreshTenants(); }
       catch(error) { alert(error.message); if(button)button.disabled=false; }
     }
     async function removeFailed(id) {
-      if (!window.confirm(`Remove the failed portal record for ${id}? This will not delete Azure resources.`)) return;
-      try { await api(`/tenants/${encodeURIComponent(id)}`,{method:"DELETE"}); state.tenants=state.tenants.filter(t=>t.tenant_id!==id); $("tenantDetailsCard").classList.add("hidden"); renderAll(); }
+      if (!await appConfirm({title:"Remove failed request",message:`Remove the failed portal record for ${id}? This will not delete Azure resources.`})) return;
+      try { await api(`/tenants/${encodeURIComponent(id)}`,{method:"DELETE"}); state.tenants=state.tenants.filter(t=>t.tenant_id!==id); state.expandedTenantId=null; renderAll(); }
       catch(error) { alert(error.message); }
     }
     async function deprovisionTenant(id) {
-      if (!window.confirm(`Permanently delete the Azure resources for tenant ${id}? This removes its tenant resource groups and budget.`)) return;
-      if (window.prompt(`To confirm, type the exact tenant ID: ${id}`) !== id) return;
-      const button = $("tenantDetails").querySelector("[data-deprovision]"); if (button) button.disabled = true;
+      if (!await appConfirm({title:"Deprovision tenant",message:`Permanently delete the Azure resources for tenant ${id}? This removes its tenant resource groups and budget.`,requiredText:id})) return;
+      const button = $(`detailsMount-${id}`)?.querySelector("[data-deprovision]"); if (button) button.disabled = true;
       try {
         await api(`/tenants/${encodeURIComponent(id)}/deprovision`, {method:"POST", body:JSON.stringify({confirm_tenant_id:id})});
-        await refreshTenants(); await showDetails(id);
+        state.expandedTenantId=id; await refreshTenants();
       } catch(error) { alert(error.message); if(button)button.disabled=false; }
     }
     function makeTenantId(name) { return name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,""); }
@@ -318,7 +369,8 @@
         const record=await api("/tenants",{method:"POST",body:JSON.stringify({tenant_id:id,tenant_name:name,owner_email:email,environment:$("environmentTier").value,location:$("azureRegion").value,monthly_budget:budget})});
         saveRequestReference(record.tenant_id,record.request_token);
         state.publicRequests=[{...record},...state.publicRequests.filter(t=>t.tenant_id!==record.tenant_id)]; renderAll();
-        showPage("my-environment"); window.setTimeout(refreshPublicRequests,900);
+        if(state.auth?.is_admin){state.tenants=await api("/tenants");state.expandedTenantId=record.tenant_id;showPage("tenants");renderAdminTenants()}
+        else {showPage("my-environment");window.setTimeout(refreshPublicRequests,900)}
       } catch(error) { $("requestFeedback").className="notice error"; $("requestFeedback").textContent=error.message; }
       finally { state.busy=false; button.disabled=false; button.textContent="Submit provisioning request"; }
     });
@@ -351,7 +403,7 @@
     async function signOutAdmin() {
       sessionStorage.removeItem("cloudinabox.adminKey");
       state.adminKey=""; state.tenants=[]; state.auth={authenticated:false,is_admin:false};
-      $("adminMode").hidden=true; $("adminLogoutButton").hidden=true; $("adminLoginForm").hidden=false;
+      $("adminMode").disabled=true; $("adminMode").title="Admin sign-in required"; $("adminNav").hidden=true; $("adminLogoutButton").hidden=true; $("adminLoginForm").hidden=false;
       $("authLink").textContent="Admin sign in"; setMode("customer"); renderAll();
     }
     $("adminLoginForm").addEventListener("submit",async event=>{
@@ -364,7 +416,7 @@
         if(!auth.is_admin) throw new Error("That value was rejected. Run the Azure CLI command shown above in Terminal, then paste only its printed secret value here—not the command or shell prompt.");
         sessionStorage.setItem("cloudinabox.adminKey",key); state.auth=auth; state.tenants=await api("/tenants");
         $("adminLoginFeedback").textContent="Administrator access granted."; $("adminLoginForm").hidden=true; $("adminLogoutButton").hidden=false;
-        $("adminMode").hidden=false; $("authLink").textContent="Admin sign out"; $("adminKeyInput").value=""; setMode("admin"); renderAll();
+        $("adminMode").disabled=false; $("adminMode").title="Open administrator portal"; $("adminNav").hidden=false; $("customerNav").hidden=false; $("authLink").textContent="Admin sign out"; $("adminKeyInput").value=""; setMode("admin"); renderAll();
       } catch(error) {
         sessionStorage.removeItem("cloudinabox.adminKey"); state.adminKey="";
         $("adminLoginFeedback").textContent=error.message; $("adminKeyInput").value="";
@@ -374,12 +426,12 @@
     $("adminLogoutButton").addEventListener("click",signOutAdmin);
 
     $("customerMode").addEventListener("click",()=>setMode("customer"));
-    $("adminMode").addEventListener("click",()=>setMode("admin"));
+    $("adminMode").addEventListener("click",()=>{if(state.auth?.is_admin)setMode("admin")});
+    $("copyAdminCommand").addEventListener("click",async()=>{try{await navigator.clipboard.writeText($("adminKeyCommand").textContent);$("copyAdminCommand").textContent="Copied";setTimeout(()=>$("copyAdminCommand").textContent="Copy command",1500)}catch{$("adminLoginFeedback").textContent="Clipboard access is unavailable; select and copy the command manually."}});
     document.querySelectorAll(".nav-item").forEach(button=>button.addEventListener("click",()=>showPage(button.dataset.page)));
     document.querySelectorAll("[data-goto]").forEach(button=>button.addEventListener("click",()=>showPage(button.dataset.goto)));
     $("refreshButton").addEventListener("click",()=>refreshTenants().catch(e=>alert(e.message)));
     $("adminRefresh").addEventListener("click",()=>refreshTenants().catch(e=>alert(e.message)));
-    $("closeDetails").addEventListener("click",()=>$("tenantDetailsCard").classList.add("hidden"));
     loadBootstrap();
   </script>
 </body>

@@ -33,6 +33,7 @@ The source package is staged in an authenticated Azure Files SMB share and mount
   ```
 
 - The worker uses a managed identity and a custom subscription role for tenant vending. That identity can create/delete tenant resource groups and apply the project's listed networking, monitoring, policy, deployment, and budget actions. Treat the worker as a privileged platform component.
+- The worker also processes admin-triggered, read-only verification jobs. It checks tenant resource groups, the VNet/subnets, Log Analytics workspace, policy assignments, and budget through Azure Resource Manager, then stores a per-resource report in the portal database. Verification requires the worker code to be deployed alongside the API and worker; it does not run in the public request handler.
 - The platform database and queue hold costs while the subscription remains enabled. The portal's €1,000 request ceiling does not limit hosting costs or tenant spend.
 
 ## Selected request constraints

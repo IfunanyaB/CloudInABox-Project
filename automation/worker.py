@@ -15,6 +15,7 @@ from automation.api import (
     initialize_database,
     run_deprovisioning,
     run_provisioning,
+    run_verification_job,
 )
 
 
@@ -50,7 +51,9 @@ def handle_job(payload: dict) -> None:
         run_provisioning(record)
     elif action == "deprovision" and record["status"] == "deprovisioning":
         run_deprovisioning(tenant_id)
-    elif action not in {"provision", "deprovision"}:
+    elif action == "verify" and record.get("verification_state") in {"queued", "verifying"}:
+        run_verification_job(tenant_id)
+    elif action not in {"provision", "deprovision", "verify"}:
         raise ValueError("Unknown tenant lifecycle job action.")
 
 
