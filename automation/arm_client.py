@@ -121,7 +121,7 @@ class AzureArmClient:
             _, result, _ = self.request("GET", path)
             return result
         except RuntimeError as exc:
-            if "failed (404)" in str(exc):
+            if isinstance(exc, AzureArmError) and exc.status_code == 404:
                 return None
             raise
 
