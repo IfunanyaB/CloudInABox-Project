@@ -14,9 +14,6 @@ param budgetContactEmail string
 @description('Start date for the budget period.')
 param budgetStartDate string
 
-@description('Resource groups whose costs belong to this tenant.')
-param resourceGroupNames array
-
 // Tenant monthly budget
 resource tenantBudget 'Microsoft.Consumption/budgets@2023-05-01' = {
   name: 'budget-${tenantId}'
@@ -25,14 +22,6 @@ resource tenantBudget 'Microsoft.Consumption/budgets@2023-05-01' = {
     amount: monthlyBudgetAmount
     category: 'Cost'
     timeGrain: 'Monthly'
-
-    filter: {
-      dimensions: {
-        name: 'ResourceGroupName'
-        operator: 'In'
-        values: resourceGroupNames
-      }
-    }
 
     timePeriod: {
       startDate: budgetStartDate

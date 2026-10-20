@@ -1,0 +1,127 @@
+name: Deploy sample SaaS workload
+
+on:
+  repository_dispatch:
+    types: [cloudinabox-tenant-provisioned]
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: Provisioned tenant ID
+        required: true
+        type: string
+      subscription_id:
+        description: Tenant subscription ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  deploy-sample:
+    runs-on: ubuntu-latest
+    env:
+      TENANT_ID: ${{ github.event.client_payload.tenant_id || inputs.tenant_id }}
+      TENANT_SUBSCRIPTION_ID: ${{ github.event.client_payload.subscription_id || inputs.subscription_id }}
+      IMAGE: ghcr.io/${{ github.repository_owner }}/cloudinabox-sample-saas:${{ github.sha }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Sign in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish tenant sample image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./sample-app
+          push: true
+          tags: ${{ env.IMAGE }}
+
+      - name: Sign in to Azure with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.TENANT_SUBSCRIPTION_ID }}
+
+      - name: Deploy sample workload to the tenant subscription
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_URL=$(az deployment sub create \
+            --name "cib-sample-${TENANT_ID}" \
+            --location uksouth \
+            --subscription "${TENANT_SUBSCRIPTION_ID}" \
+            --template-file sample-app/main.bicep \
+            --parameters tenantId="${TENANT_ID}" location=uksouth image="${IMAGE}" \
+            --query properties.outputs.applicationUrl.value -o tsv)
+          echo "application_url=${APP_URL}" >> "${GITHUB_OUTPUT}"
+
+      - name: Report sample workload success to the portal
+        if: success()
+        uses: actions/github-script@v7
+        env:
+          PORTAL_API_URL: ${{ vars.PORTAL_API_URL }}
+          CIB_CALLBACK_SECRET: ${{ secrets.GITHUB_CALLBACK_SECRET }}
+          APP_URL: ${{ steps.deploy.outputs.application_url }}
+          TENANT_ID: ${{ env.TENANT_ID }}
+          TENANT_SUBSCRIPTION_ID: ${{ env.TENANT_SUBSCRIPTION_ID }}
+        with:
+          script: |
+            const crypto = require('crypto');
+            if (!process.env.PORTAL_API_URL || !process.env.CIB_CALLBACK_SECRET) {
+              core.warning('Portal callback settings are missing; workload deployment succeeded but its status was not reported.');
+              return;
+            }
+            const body = {
+              subscription_id: process.env.TENANT_SUBSCRIPTION_ID,
+              state: 'succeeded',
+              application_url: process.env.APP_URL,
+              workflow_run_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            };
+            const canonical = [process.env.TENANT_ID, body.subscription_id, body.state, body.application_url || '', body.workflow_run_url || ''].join('\n');
+            const signature = crypto.createHmac('sha256', process.env.CIB_CALLBACK_SECRET).update(canonical).digest('hex');
+            const response = await fetch(`${process.env.PORTAL_API_URL.replace(/\/$/, '')}/internal/tenants/${encodeURIComponent(process.env.TENANT_ID)}/sample-workload`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-CIB-Signature-256': `sha256=${signature}` },
+              body: JSON.stringify(body)
+            });
+            if (!response.ok) throw new Error(`Portal status callback failed with HTTP ${response.status}: ${await response.text()}`);
+
+      - name: Report sample workload failure to the portal
+        if: failure()
+        uses: actions/github-script@v7
+        env:
+          PORTAL_API_URL: ${{ vars.PORTAL_API_URL }}
+          CIB_CALLBACK_SECRET: ${{ secrets.GITHUB_CALLBACK_SECRET }}
+          TENANT_ID: ${{ env.TENANT_ID }}
+          TENANT_SUBSCRIPTION_ID: ${{ env.TENANT_SUBSCRIPTION_ID }}
+        with:
+          script: |
+            const crypto = require('crypto');
+            if (!process.env.PORTAL_API_URL || !process.env.CIB_CALLBACK_SECRET) {
+              core.warning('Portal callback settings are missing; workload failure is available in GitHub Actions logs.');
+              return;
+            }
+            const body = {
+              subscription_id: process.env.TENANT_SUBSCRIPTION_ID,
+              state: 'failed',
+              application_url: null,
+              workflow_run_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            };
+            const canonical = [process.env.TENANT_ID, body.subscription_id, body.state, '', body.workflow_run_url || ''].join('\n');
+            const signature = crypto.createHmac('sha256', process.env.CIB_CALLBACK_SECRET).update(canonical).digest('hex');
+            const response = await fetch(`${process.env.PORTAL_API_URL.replace(/\/$/, '')}/internal/tenants/${encodeURIComponent(process.env.TENANT_ID)}/sample-workload`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-CIB-Signature-256': `sha256=${signature}` },
+              body: JSON.stringify(body)
+            });
+            if (!response.ok) core.warning(`Portal failure callback returned HTTP ${response.status}: ${await response.text()}`);

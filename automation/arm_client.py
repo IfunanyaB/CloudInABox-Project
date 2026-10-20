@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
+from urllib.parse import quote
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -72,10 +74,118 @@ class AzureArmClient:
         _, result, _ = self.request("GET", path)
         return result.get("state", "")
 
+    def get_subscription_alias(self, alias_name: str) -> dict[str, Any] | None:
+        path = f"/providers/Microsoft.Subscription/aliases/{quote(alias_name, safe='')}?api-version=2021-10-01"
+        try:
+            _, result, _ = self.request("GET", path)
+            return result
+        except RuntimeError as exc:
+            if "failed (404)" in str(exc):
+                return None
+            raise
+
+    def create_subscription_alias(
+        self,
+        alias_name: str,
+        *,
+        billing_scope: str,
+        display_name: str,
+        management_group_id: str,
+        tenant_id: str,
+        subscription_owner_id: str,
+        timeout: int = 1800,
+    ) -> dict[str, Any]:
+        """Create or resume an idempotently named subscription alias."""
+        path = f"/providers/Microsoft.Subscription/aliases/{quote(alias_name, safe='')}?api-version=2021-10-01"
+        existing = self.get_subscription_alias(alias_name)
+        if existing is None:
+            body = {
+                "properties": {
+                    "displayName": display_name,
+                    "billingScope": billing_scope,
+                    "workload": "Production",
+                    "additionalProperties": {
+                        "subscriptionTenantId": tenant_id,
+                        "subscriptionOwnerId": subscription_owner_id,
+                        "managementGroupId": management_group_id,
+                        "tags": {"Project": "CloudInABox", "ManagedBy": "CloudInABox"},
+                    },
+                },
+            }
+            status, result, headers = self.request("PUT", path, body, timeout=300)
+            self.wait_operation(status, result, headers, timeout=timeout)
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            result = self.get_subscription_alias(alias_name)
+            properties = (result or {}).get("properties") or {}
+            state = str(properties.get("provisioningState") or properties.get("state") or "").lower()
+            if properties.get("subscriptionId") and state in {"succeeded", "success", ""}:
+                return result
+            if state in {"failed", "canceled", "cancelled"}:
+                raise RuntimeError(f"Azure subscription vending failed: {properties.get('error') or properties}")
+            time.sleep(5)
+        raise RuntimeError(f"Azure subscription alias {alias_name} did not finish within {timeout} seconds.")
+
     def list_vnets(self) -> list[dict[str, Any]]:
         path = f"/subscriptions/{self.subscription_id}/providers/Microsoft.Network/virtualNetworks?api-version=2024-05-01"
         _, result, _ = self.request("GET", path)
         return result.get("value", [])
+
+    def list_resource_inventory(self, resource_group: str | None = None) -> list[dict[str, Any]]:
+        scope = (f"/subscriptions/{self.subscription_id}/resourceGroups/{quote(resource_group, safe='')}"
+                 if resource_group else f"/subscriptions/{self.subscription_id}")
+        path = f"{scope}/resources?api-version=2021-04-01"
+        output = []
+        while path:
+            _, result, _ = self.request("GET", path)
+            output.extend(result.get("value", []))
+            path = result.get("nextLink")
+        return output
+
+    def peer_virtual_network(
+        self,
+        vnet_resource_id: str,
+        peering_name: str,
+        remote_vnet_id: str,
+        *,
+        allow_gateway_transit: bool = False,
+        use_remote_gateways: bool = False,
+    ) -> dict[str, Any]:
+        path = (f"{vnet_resource_id}/virtualNetworkPeerings/{quote(peering_name, safe='')}"
+                "?api-version=2025-01-01")
+        body = {"properties": {
+            "remoteVirtualNetwork": {"id": remote_vnet_id},
+            "allowVirtualNetworkAccess": True,
+            "allowForwardedTraffic": True,
+            "allowGatewayTransit": allow_gateway_transit,
+            "useRemoteGateways": use_remote_gateways,
+        }}
+        status, result, headers = self.request("PUT", path, body, timeout=300)
+        return self.wait_operation(status, result, headers)
+
+    def delete_virtual_network_peering(self, vnet_resource_id: str, peering_name: str) -> None:
+        path = (f"{vnet_resource_id}/virtualNetworkPeerings/{quote(peering_name, safe='')}"
+                "?api-version=2025-01-01")
+        try:
+            status, result, headers = self.request("DELETE", path, timeout=300)
+            if status != 204:
+                self.wait_operation(status, result, headers)
+        except RuntimeError as exc:
+            if "failed (404)" not in str(exc):
+                raise
+
+    def assign_subscription_role(self, principal_id: str, role_definition_id: str) -> dict[str, Any]:
+        assignment_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.subscription_id}:{principal_id}:{role_definition_id}"))
+        path = (f"/subscriptions/{self.subscription_id}/providers/Microsoft.Authorization/roleAssignments/"
+                f"{assignment_id}?api-version=2022-04-01")
+        body = {"properties": {
+            "roleDefinitionId": f"/subscriptions/{self.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/{role_definition_id}",
+            "principalId": principal_id,
+            "principalType": "Group",
+        }}
+        _, result, _ = self.request("PUT", path, body)
+        return result
 
     def subscription_what_if(self, deployment_name: str, location: str, template: dict, parameters: dict) -> dict:
         path = (f"/subscriptions/{self.subscription_id}/providers/Microsoft.Resources/deployments/"

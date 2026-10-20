@@ -1,4 +1,4 @@
-"""Provision isolated tenant resource groups in the active Azure subscription."""
+"""Vend an isolated Azure subscription and deploy its landing zone."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ import os
 import re
 import subprocess
 import tempfile
-from datetime import date
+from urllib.parse import quote
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -18,7 +19,6 @@ from dotenv import load_dotenv
 load_dotenv()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 INFRASTRUCTURE_DIR = PROJECT_ROOT / "infrastructure"
-PARAMETERS_DIR = INFRASTRUCTURE_DIR / "parameters"
 ALLOWED_ENVIRONMENTS = {"dev"}
 ALLOWED_LOCATIONS = {"uksouth"}
 MAX_REQUEST_BUDGET_EUR = int(os.getenv("MAX_REQUEST_BUDGET_EUR", "1000") or "1000")
@@ -103,8 +103,79 @@ def active_subscription_id() -> str:
     return selected
 
 
+def tenant_subscription_id(
+    tenant: dict[str, Any],
+    platform_subscription_id: str,
+    *,
+    on_subscription_id: Callable[[str], None] | None = None,
+) -> str:
+    """Create a dedicated MCA subscription, or resume a previously vended one."""
+    existing = str(tenant.get("subscription_id") or "").strip()
+    if existing:
+        if existing == platform_subscription_id:
+            raise RuntimeError("This request is a legacy tenant in the shared platform subscription. It cannot be retried as isolated; create a new request or deprovision it first.")
+        return existing
+
+    billing_scope = os.getenv("TENANT_BILLING_SCOPE", "").strip()
+    management_group_id = os.getenv("TENANT_MANAGEMENT_GROUP_ID", "Tenant").strip()
+    subscription_owner_id = os.getenv("WORKER_PRINCIPAL_OBJECT_ID", "").strip()
+    if not billing_scope:
+        raise RuntimeError("Subscription vending is enabled but TENANT_BILLING_SCOPE is not configured.")
+    if not management_group_id:
+        raise RuntimeError("TENANT_MANAGEMENT_GROUP_ID must identify the tenant landing-zone management group.")
+    if not subscription_owner_id:
+        raise RuntimeError("WORKER_PRINCIPAL_OBJECT_ID must identify the portal worker managed identity.")
+    from automation.arm_client import AzureArmClient
+
+    tenant_directory_id = os.getenv("AZURE_TENANT_ID", "").strip()
+    if not tenant_directory_id:
+        context = az_json(["account", "show", "--query", "tenantId", "-o", "tsv"], "reading Azure tenant context")
+        tenant_directory_id = str(context).strip()
+    alias = f"cib-{tenant['tenant_id']}"
+    alias_result = AzureArmClient(platform_subscription_id).create_subscription_alias(
+        alias,
+        billing_scope=billing_scope,
+        display_name=f"Cloud-in-a-Box - {tenant.get('tenant_name') or tenant['tenant_id']}",
+        management_group_id=management_group_id,
+        tenant_id=tenant_directory_id,
+        subscription_owner_id=subscription_owner_id,
+    )
+    new_subscription_id = str((alias_result.get("properties") or {}).get("subscriptionId") or "").strip()
+    if not new_subscription_id:
+        raise RuntimeError("Azure completed the subscription alias without returning a subscription ID.")
+    if on_subscription_id:
+        on_subscription_id(new_subscription_id)
+    return new_subscription_id
+
+
+def hub_configuration(platform_subscription_id: str) -> dict[str, str | bool]:
+    hub_subscription_id = os.getenv("HUB_SUBSCRIPTION_ID", platform_subscription_id).strip()
+    hub_resource_group = os.getenv("HUB_RESOURCE_GROUP", "rg-cib-hub").strip()
+    hub_vnet_name = os.getenv("HUB_VNET_NAME", "").strip()
+    hub_vnet_id = (f"/subscriptions/{hub_subscription_id}/resourceGroups/{hub_resource_group}"
+                   f"/providers/Microsoft.Network/virtualNetworks/{hub_vnet_name}") if hub_vnet_name else ""
+    return {
+        "subscription_id": hub_subscription_id,
+        "resource_group": hub_resource_group,
+        "vnet_name": hub_vnet_name,
+        "vnet_id": hub_vnet_id,
+        "firewall_private_ip": os.getenv("HUB_FIREWALL_PRIVATE_IP", "").strip(),
+        "vpn_gateway_enabled": os.getenv("HUB_VPN_GATEWAY_ENABLED", "false").lower() == "true",
+    }
+
+
 def validate_bicep() -> None:
-    for file in [INFRASTRUCTURE_DIR / "main.bicep", *sorted((INFRASTRUCTURE_DIR / "modules").glob("*.bicep"))]:
+    files = [
+        INFRASTRUCTURE_DIR / "main.bicep",
+        INFRASTRUCTURE_DIR / "hub-network-deploy.bicep",
+        INFRASTRUCTURE_DIR / "hub-network.bicep",
+        INFRASTRUCTURE_DIR / "tenant-management-group-access.bicep",
+        INFRASTRUCTURE_DIR / "platform-apps.bicep",
+        PROJECT_ROOT / "sample-app" / "main.bicep",
+        PROJECT_ROOT / "sample-app" / "app.bicep",
+        *sorted((INFRASTRUCTURE_DIR / "modules").glob("*.bicep")),
+    ]
+    for file in files:
         result = run_az(["bicep", "build", "--file", str(file), "--stdout"])
         if result.returncode:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"Bicep build failed: {file.name}")
@@ -113,22 +184,6 @@ def validate_bicep() -> None:
             result = run_az(["bicep", "build-params", "--file", str(file), "--outfile", output.name])
             if result.returncode:
                 raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"Parameter validation failed: {file.name}")
-
-
-def profile_parameters(profile: Path) -> dict[str, Any]:
-    with tempfile.NamedTemporaryFile(suffix=".json") as output:
-        result = run_az(["bicep", "build-params", "--file", str(profile), "--outfile", output.name])
-        if result.returncode:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"Could not read {profile.name}")
-        parsed = json.loads(Path(output.name).read_text(encoding="utf-8"))
-    values = {key: value["value"] for key, value in parsed["parameters"].items()}
-    tenant = {
-        "tenant_id": values["tenantId"], "environment": values["environment"],
-        "owner": values["owner"], "location": values["location"],
-        "monthly_budget": values["monthlyBudgetAmount"],
-    }
-    validate_tenant(tenant)
-    return values
 
 
 def allocate_address_space(tenant_id: str, subscription_id: str) -> ipaddress.IPv4Network:
@@ -158,7 +213,7 @@ def allocate_address_space(tenant_id: str, subscription_id: str) -> ipaddress.IP
         if any(own.overlaps(other) for other, is_own in used if not is_own):
             raise RuntimeError(f"Existing VNet address range {own} overlaps another VNet in the subscription.")
         return own
-    for second_octet in range(10, 256):
+    for second_octet in range(30, 255):
         candidate = ipaddress.ip_network(f"10.{second_octet}.0.0/16")
         if not any(candidate.overlaps(other) for other, _ in used):
             return candidate
@@ -182,55 +237,49 @@ def write_deployment_parameters(values: dict[str, Any], address: ipaddress.IPv4N
     return Path(handle.name)
 
 
-def deploy_profile(profile: Path, subscription_id: str, *, dry_run: bool) -> dict[str, Any]:
-    values = profile_parameters(profile)
-    tenant_id = values["tenantId"]
-    location = values["location"]
-    address = allocate_address_space(tenant_id, subscription_id)
-    param_file = write_deployment_parameters(values, address)
-    deployment_name = f"cloudinabox-{tenant_id}"
-    base = ["deployment", "sub", "what-if", "--name", deployment_name,
-            "--location", location, "--subscription", subscription_id,
-            "--template-file", str(INFRASTRUCTURE_DIR / "main.bicep"), "--parameters", str(param_file)]
-    try:
-        result = run_az(base)
-        if result.returncode:
-            return {"tenant_id": tenant_id, "status": "failed", "phase": "what-if",
-                    "subscription_id": subscription_id, "address_space": str(address),
-                    "error": result.stderr.strip() or result.stdout.strip()}
-        if dry_run:
-            return {"tenant_id": tenant_id, "status": "validated", "phase": "what-if",
-                    "subscription_id": subscription_id, "address_space": str(address),
-                    "deployment_name": deployment_name}
-        create = [*base]
-        create[2] = "create"
-        result = run_az([*create, "-o", "json"])
-        if result.returncode:
-            return {"tenant_id": tenant_id, "status": "failed", "phase": "deployment",
-                    "subscription_id": subscription_id, "address_space": str(address),
-                    "error": result.stderr.strip() or result.stdout.strip()}
-        return {"tenant_id": tenant_id, "status": "success", "phase": "deployment",
-                "subscription_id": subscription_id,
-                "address_space": str(address), "deployment_name": deployment_name}
-    finally:
-        param_file.unlink(missing_ok=True)
-
-
 def vend_tenant(
     tenant: dict[str, Any], *, dry_run: bool = True,
     on_phase: Callable[[str], None] | None = None,
+    on_subscription_id: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Deploy one portal request into the active subscription."""
+    """Vend a dedicated Azure subscription and deploy its isolated landing zone."""
     validate_tenant(tenant)
+    platform_subscription_id = active_subscription_id()
+    hub = hub_configuration(platform_subscription_id)
+    if not hub["vnet_id"]:
+        raise RuntimeError("Tenant subscription vending requires HUB_VNET_NAME and a provisioned shared hub VNet.")
+    if dry_run and not tenant.get("subscription_id"):
+        if not os.getenv("TENANT_BILLING_SCOPE", "").strip():
+            raise RuntimeError("Set TENANT_BILLING_SCOPE before provisioning a tenant into its own Azure subscription.")
+        return {
+            "tenant_id": tenant["tenant_id"],
+            "tenant_name": tenant.get("tenant_name", tenant["tenant_id"]),
+            "subscription_id": None,
+            "address_space": str(ipaddress.ip_network(tenant.get("address_space") or "10.30.0.0/16", strict=True)),
+            "status": "validated",
+            "phase": "configuration",
+            "message": "Request shape and subscription-vending configuration are valid; no Azure subscription or resource was created.",
+        }
     values = {
         "tenantId": tenant["tenant_id"], "environment": tenant["environment"],
         "owner": tenant["owner"], "location": tenant["location"],
         "monthlyBudgetAmount": int(tenant["monthly_budget"]),
         "budgetContactEmail": os.getenv("BUDGET_CONTACT_EMAIL") or tenant["owner"],
         "budgetStartDate": date.today().replace(day=1).isoformat() + "T00:00:00Z",
+        "hubVnetId": hub["vnet_id"],
+        "hubSubscriptionId": hub["subscription_id"],
+        "hubResourceGroupName": hub["resource_group"],
+        "hubVnetName": hub["vnet_name"],
+        "hubFirewallPrivateIp": hub["firewall_private_ip"],
+        "hubVpnGatewayEnabled": hub["vpn_gateway_enabled"],
+        "platformGroupObjectId": os.getenv("PLATFORM_GROUP_OBJECT_ID", ""),
+        "tenantGroupObjectId": tenant.get("tenant_group_object_id") or "",
+        "githubActionsPrincipalObjectId": os.getenv("GITHUB_ACTIONS_PRINCIPAL_OBJECT_ID", ""),
     }
-    subscription_id = active_subscription_id()
-    address = allocate_address_space(tenant["tenant_id"], subscription_id)
+    subscription_id = tenant_subscription_id(
+        tenant, platform_subscription_id, on_subscription_id=on_subscription_id,
+    )
+    address = ipaddress.ip_network(tenant.get("address_space") or allocate_address_space(tenant["tenant_id"], subscription_id), strict=True)
     details = {
         "tenant_id": tenant["tenant_id"],
         "tenant_name": tenant.get("tenant_name", tenant["tenant_id"]),
@@ -241,6 +290,7 @@ def vend_tenant(
         "subscription_id": subscription_id,
         "address_space": str(address),
         "deployment_name": f"cloudinabox-{tenant['tenant_id']}",
+        "hub_vnet_id": hub["vnet_id"],
     }
     if os.getenv("APP_ENV", "development").lower() == "production":
         from automation.arm_client import AzureArmClient
@@ -258,6 +308,15 @@ def vend_tenant(
             "appSubnetPrefix": str(list(address.subnets(new_prefix=24))[1]),
             "dataSubnetPrefix": str(list(address.subnets(new_prefix=24))[2]),
             "managementSubnetPrefix": str(list(address.subnets(new_prefix=24))[3]),
+            "hubVnetId": hub["vnet_id"],
+            "hubSubscriptionId": hub["subscription_id"],
+            "hubResourceGroupName": hub["resource_group"],
+            "hubVnetName": hub["vnet_name"],
+            "hubFirewallPrivateIp": hub["firewall_private_ip"],
+            "hubVpnGatewayEnabled": hub["vpn_gateway_enabled"],
+            "platformGroupObjectId": os.getenv("PLATFORM_GROUP_OBJECT_ID", ""),
+            "tenantGroupObjectId": tenant.get("tenant_group_object_id") or "",
+            "githubActionsPrincipalObjectId": os.getenv("GITHUB_ACTIONS_PRINCIPAL_OBJECT_ID", ""),
         }
         parameter_values = {key: {"value": value} for key, value in parameters.items()}
         arm = AzureArmClient(subscription_id)
@@ -315,13 +374,16 @@ def deprovision_tenant(
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,38}[a-z0-9]", tenant_id):
         raise ValueError("Invalid tenant ID; refusing to construct Azure resource names.")
 
-    subscription_id = active_subscription_id()
-    if not expected_subscription_id or subscription_id != expected_subscription_id:
-        raise RuntimeError("The active Azure subscription does not match this tenant's recorded subscription; no resources were deleted.")
+    subscription_id = str(expected_subscription_id or "")
+    if not subscription_id:
+        raise RuntimeError("No dedicated Azure subscription is recorded for this tenant; no resources were deleted.")
+
+    platform_subscription_id = active_subscription_id()
 
     if os.getenv("APP_ENV", "development").lower() == "production":
         from automation.arm_client import AzureArmClient
         arm = AzureArmClient(subscription_id)
+        hub = hub_configuration(platform_subscription_id)
         group_names = {f"rg-{tenant_id}-{suffix}" for suffix in ("network", "app", "data", "monitoring")}
         owned_groups = []
         for group in arm.list_resource_groups():
@@ -331,6 +393,8 @@ def deprovision_tenant(
             if tags.get("TenantId") != tenant_id or tags.get("Project") != "CloudInABox":
                 raise RuntimeError(f"Resource group {group['name']} does not have the expected tenant ownership tags; no resources were deleted.")
             owned_groups.append(group["name"])
+        if hub["vnet_id"]:
+            AzureArmClient(str(hub["subscription_id"])).delete_virtual_network_peering(str(hub["vnet_id"]), f"to-{tenant_id}")
         budget_name = f"budget-{tenant_id}"
         has_budget = any(item.get("name") == budget_name for item in arm.list_budgets())
         removed_groups = []
@@ -361,6 +425,11 @@ def deprovision_tenant(
     budget_name = f"budget-{tenant_id}"
     has_budget = any(item.get("name") == budget_name for item in budgets)
 
+    from automation.arm_client import AzureArmClient
+    hub = hub_configuration(platform_subscription_id)
+    if hub["vnet_id"]:
+        AzureArmClient(str(hub["subscription_id"])).delete_virtual_network_peering(str(hub["vnet_id"]), f"to-{tenant_id}")
+
     removed_groups = []
     for group_name in owned_groups:
         if on_phase:
@@ -387,9 +456,8 @@ def verify_tenant_resources(tenant: dict[str, Any]) -> dict[str, Any]:
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,38}[a-z0-9]", tenant_id):
         raise ValueError("Invalid tenant ID; refusing to construct Azure resource IDs.")
     subscription_id = str(tenant.get("subscription_id") or "")
-    configured = active_subscription_id()
-    if not subscription_id or configured != subscription_id:
-        raise RuntimeError("The active Azure subscription does not match this tenant's recorded subscription.")
+    if not subscription_id:
+        raise RuntimeError("The tenant has no recorded Azure subscription ID.")
 
     from automation.arm_client import AzureArmClient
     arm = AzureArmClient(subscription_id)
@@ -441,51 +509,171 @@ def verify_tenant_resources(tenant: dict[str, Any]) -> dict[str, Any]:
               "missing" if not workspace else {"retentionInDays": retention, "sku": ((workspace.get("properties") or {}).get("sku") or {}).get("name")},
               bool(workspace and retention == 30))
 
-    policies = ["policy-allowed-locations", "policy-required-tenant-id", "policy-required-environment"]
-    for group_name in groups:
-        for policy_name in policies:
-            resource_id = f"/subscriptions/{subscription_id}/resourceGroups/{group_name}/providers/Microsoft.Authorization/policyAssignments/{policy_name}"
-            policy = get(resource_id, "policy")
-            add_check(f"Policy {policy_name} on {group_name}", resource_id, "assignment exists",
-                      "present" if policy else "missing", bool(policy),
-                      {"displayName": ((policy or {}).get("properties") or {}).get("displayName")})
+    management_group_id = os.getenv("TENANT_MANAGEMENT_GROUP_ID", "Tenant").strip()
+    inherited_policy = "cib-allowed-locations"
+    management_group_policy_id = (
+        f"/providers/Microsoft.Management/managementGroups/{quote(management_group_id, safe='')}"
+        f"/providers/Microsoft.Authorization/policyAssignments/{inherited_policy}"
+    )
+    policy = get(management_group_policy_id, "policy")
+    add_check(f"Management group policy {inherited_policy}", management_group_policy_id,
+              "assignment exists at the tenant management-group scope and is inherited",
+              "present" if policy else "missing", bool(policy),
+              {"displayName": ((policy or {}).get("properties") or {}).get("displayName")})
+
+    for policy_name in ("cib-required-tenant-id", "cib-required-environment", "cib-deny-public-ip"):
+        resource_id = f"/subscriptions/{subscription_id}/providers/Microsoft.Authorization/policyAssignments/{policy_name}"
+        policy = get(resource_id, "policy")
+        add_check(f"Subscription policy {policy_name}", resource_id, "subscription-scope assignment exists",
+                  "present" if policy else "missing", bool(policy),
+                  {"displayName": ((policy or {}).get("properties") or {}).get("displayName")})
 
     budget_id = f"/subscriptions/{subscription_id}/providers/Microsoft.Consumption/budgets/budget-{tenant_id}"
     budget = get(budget_id, "budget")
     budget_properties = (budget or {}).get("properties") or {}
     dimensions = ((budget_properties.get("filter") or {}).get("dimensions") or {})
-    budget_groups = set(dimensions.get("values") or [])
-    add_check("Tenant monthly budget", budget_id, "budget exists and filters to the four tenant resource groups",
-              "missing" if not budget else {"amount": budget_properties.get("amount"), "timeGrain": budget_properties.get("timeGrain"), "resourceGroups": sorted(budget_groups)},
-              bool(budget and set(groups).issubset(budget_groups)))
+    add_check("Tenant monthly budget", budget_id, "budget covers the dedicated tenant subscription",
+              "missing" if not budget else {"amount": budget_properties.get("amount"), "timeGrain": budget_properties.get("timeGrain"), "filter": budget_properties.get("filter")},
+              bool(budget and budget_properties.get("timeGrain") == "Monthly" and not dimensions))
+
+    # Include a live inventory and real Cost Management/Log Analytics responses
+    # alongside the baseline verification. Keep each data source independently
+    # fallible so missing permissions never hide the ARM resource inventory.
+    resource_groups = []
+    tenant_group_objects = [item for item in arm.list_resource_groups()
+                            if item.get("tags", {}).get("TenantId") == tenant_id
+                            or item.get("name") in groups]
+    for group_object in tenant_group_objects:
+        group_name = group_object.get("name")
+        if not group_name:
+            continue
+        group_path = f"/subscriptions/{subscription_id}/resourceGroups/{group_name}"
+        resources = []
+        try:
+            path = f"{group_path}/resources?api-version=2021-04-01"
+            while path:
+                _, page, _ = arm.request("GET", path)
+                for resource in page.get("value", []):
+                    properties = resource.get("properties") or {}
+                    resource_item = {
+                        "name": resource.get("name"), "type": resource.get("type"),
+                        "location": resource.get("location"), "id": resource.get("id"),
+                        "provisioning_state": properties.get("provisioningState") or resource.get("provisioningState"),
+                        "sku": resource.get("sku"), "metrics": [], "metrics_state": "unavailable",
+                    }
+                    try:
+                        definitions_path = f"{resource['id']}/providers/Microsoft.Insights/metricDefinitions?api-version=2018-01-01"
+                        _, definitions, _ = arm.request("GET", definitions_path, timeout=30)
+                        definition_items = definitions.get("value", [])
+                        metric_names = [item.get("name", {}).get("value") for item in definition_items[:3]]
+                        metric_names = [name for name in metric_names if name]
+                        if metric_names:
+                            end_time = datetime.now(timezone.utc)
+                            timespan = f"{(end_time - timedelta(hours=24)).isoformat()}/{end_time.isoformat()}"
+                            metric_path = (f"{resource['id']}/providers/Microsoft.Insights/metrics"
+                                           f"?api-version=2018-01-01&metricnames={quote(','.join(metric_names))}&timespan={quote(timespan)}&interval=PT1H&aggregation=Average")
+                            _, metric_result, _ = arm.request("GET", metric_path, timeout=30)
+                            for metric in metric_result.get("value", []):
+                                points = [point for series in metric.get("timeseries", []) for point in series.get("data", [])]
+                                recent = next((point for point in reversed(points) if point.get("average") is not None), None)
+                                if recent:
+                                    resource_item["metrics"].append({
+                                        "name": metric.get("name", {}).get("localizedValue") or metric.get("name", {}).get("value"),
+                                        "unit": metric.get("unit"), "timestamp": recent.get("timeStamp"),
+                                        "average": recent.get("average"),
+                                    })
+                            resource_item["metrics_state"] = "available" if resource_item["metrics"] else "no_data"
+                        else:
+                            resource_item["metrics_state"] = "not_supported"
+                    except Exception as metrics_exc:
+                        resource_item["metrics_error"] = str(metrics_exc)
+                    resources.append(resource_item)
+                path = page.get("nextLink")
+            inventory_state = "available"
+            inventory_error = None
+        except Exception as exc:
+            inventory_state, inventory_error = "unavailable", str(exc)
+        resource_groups.append({"name": group_name, "resource_id": group_path,
+                                "resources": resources, "state": inventory_state,
+                                "error": inventory_error})
+
+    cost = {"state": "unavailable", "currency": None, "month_to_date": None, "daily": [], "by_resource_group": [], "error": None}
+    try:
+        cost_path = f"/subscriptions/{subscription_id}/providers/Microsoft.CostManagement/query?api-version=2023-03-01"
+        cost_body = {
+            "type": "Usage", "timeframe": "MonthToDate",
+            "dataset": {"granularity": "Daily",
+                "aggregation": {"totalCost": {"name": "PreTaxCost", "function": "Sum"}},
+                "grouping": [{"type": "Dimension", "name": "ResourceGroup"}]},
+        }
+        _, result, _ = arm.request("POST", cost_path, cost_body, timeout=120)
+        columns = [column.get("name") for column in result.get("properties", {}).get("columns", [])]
+        rows = result.get("properties", {}).get("rows", [])
+        cost_rows = [dict(zip(columns, row)) for row in rows]
+        amount_key = next((key for key in columns if key and key.lower() in {"pretaxcost", "totalcost"}), None)
+        currency_key = next((key for key in columns if key and key.lower() == "currency"), None)
+        date_key = next((key for key in columns if key and key.lower() == "usagedate"), None)
+        group_key = next((key for key in columns if key and key.lower() in {"resourcegroup", "resourcegroupname"}), None)
+        by_day, by_group = {}, {}
+        total = 0.0
+        for row in cost_rows:
+            amount = float(row.get(amount_key) or 0) if amount_key else 0.0
+            total += amount
+            if date_key:
+                day = str(row.get(date_key))
+                if day.isdigit() and len(day) == 8:
+                    day = f"{day[:4]}-{day[4:6]}-{day[6:8]}"
+                by_day[day] = by_day.get(day, 0.0) + amount
+            if group_key:
+                group = str(row.get(group_key) or "Unknown")
+                by_group[group] = by_group.get(group, 0.0) + amount
+        cost = {"state": "available" if cost_rows else "no_data", "currency": next((str(row.get(currency_key)) for row in cost_rows if row.get(currency_key)), None),
+                "month_to_date": total if cost_rows else None, "daily": [{"date": key, "amount": value} for key, value in sorted(by_day.items())],
+                "by_resource_group": [{"name": key, "amount": value} for key, value in sorted(by_group.items())], "error": None}
+    except Exception as exc:
+        cost["error"] = str(exc)
+
+    logs = {"state": "unavailable", "tables": [], "error": None}
+    workspace_customer_id = ((workspace or {}).get("properties") or {}).get("customerId")
+    if workspace_customer_id:
+        try:
+            token = arm.credential.get_token("https://api.loganalytics.io/.default").token
+            from urllib.request import Request, urlopen
+            query_url = f"https://api.loganalytics.azure.com/v1/workspaces/{workspace_customer_id}/query"
+            query_data = json.dumps({"query": "AzureActivity | where TimeGenerated > ago(24h) | summarize Events=count() by Category | take 20"}).encode()
+            req = Request(query_url, data=query_data, method="POST", headers={
+                "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+            with urlopen(req, timeout=45) as response:
+                logs_response = json.loads(response.read() or b"{}")
+            logs = {"state": "available", "tables": logs_response.get("tables", []), "error": None}
+        except Exception as exc:
+            logs["error"] = str(exc)
+    else:
+        logs["error"] = "The tenant Log Analytics workspace could not be read."
 
     passed = sum(1 for check in checks if check["passed"])
     return {"verified_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "subscription_id": subscription_id, "tenant_id": tenant_id,
             "passed": passed, "total": len(checks), "all_passed": passed == len(checks),
-            "checks": checks}
+            "checks": checks, "resource_groups": resource_groups, "cost": cost, "logs": logs,
+            "telemetry_note": "Platform metrics are resource-specific; this deployment currently provisions networking and monitoring foundations rather than compute workloads."}
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Provision isolated tenants in the active Azure subscription.")
+    parser = argparse.ArgumentParser(description="Vend an isolated Azure subscription and landing zone.")
     parser.add_argument("--tenant-id", default="tenant-b")
     parser.add_argument("--environment", choices=sorted(ALLOWED_ENVIRONMENTS), default="dev")
     parser.add_argument("--owner", default="platform-team")
     parser.add_argument("--location", default=os.getenv("AZURE_LOCATION", "uksouth"))
     parser.add_argument("--monthly-budget", type=int, default=50)
-    parser.add_argument("--all-profiles", action="store_true", help="Process all configured tenant parameter profiles.")
     parser.add_argument("--deploy", action="store_true", help="Run Azure what-if and deploy the tenant resources.")
     args = parser.parse_args()
     try:
         validate_bicep()
         subscription_id = active_subscription_id()
-        if args.all_profiles:
-            profiles = sorted(PARAMETERS_DIR.glob("*.bicepparam"))
-            results = [deploy_profile(profile, subscription_id, dry_run=not args.deploy) for profile in profiles]
-        else:
-            tenant = {"tenant_id": args.tenant_id, "environment": args.environment, "owner": args.owner,
-                      "location": args.location, "monthly_budget": args.monthly_budget}
-            results = [vend_tenant(tenant, dry_run=not args.deploy)]
+        tenant = {"tenant_id": args.tenant_id, "environment": args.environment, "owner": args.owner,
+                  "location": args.location, "monthly_budget": args.monthly_budget}
+        results = [vend_tenant(tenant, dry_run=not args.deploy)]
     except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, indent=2))
         return 1

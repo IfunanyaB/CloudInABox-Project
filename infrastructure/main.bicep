@@ -21,6 +21,9 @@ param platformGroupObjectId string = ''
 @description('Object ID of the tenant team Entra ID group.')
 param tenantGroupObjectId string = ''
 
+@description('Object ID of the GitHub Actions service principal used by the sample-workload OIDC deployment.')
+param githubActionsPrincipalObjectId string = ''
+
 @description('Monthly budget amount for the tenant.')
 param monthlyBudgetAmount int = 50
 
@@ -41,6 +44,24 @@ param dataSubnetPrefix string = '10.10.2.0/24'
 
 @description('Address range for the management subnet.')
 param managementSubnetPrefix string = '10.10.3.0/24'
+
+@description('Resource ID for the shared, separately provisioned Cloud-in-a-Box hub VNet.')
+param hubVnetId string = ''
+
+@description('Subscription hosting the shared hub network.')
+param hubSubscriptionId string = subscription().subscriptionId
+
+@description('Resource group containing the shared hub VNet.')
+param hubResourceGroupName string = 'rg-cib-hub'
+
+@description('Name of the shared hub VNet.')
+param hubVnetName string = 'vnet-cib-hub'
+
+@description('Private IP address of the shared Azure Firewall; empty disables forced egress routing.')
+param hubFirewallPrivateIp string = ''
+
+@description('Whether the shared hub has a VPN gateway for transit.')
+param hubVpnGatewayEnabled bool = false
 
 // Common tags for tenant resources
 var commonTags = {
@@ -72,8 +93,20 @@ module tenantNetworking './modules/networking.bicep' = {
     appSubnetPrefix: appSubnetPrefix
     dataSubnetPrefix: dataSubnetPrefix
     managementSubnetPrefix: managementSubnetPrefix
+    hubVnetId: hubVnetId
+    firewallPrivateIp: hubFirewallPrivateIp
+    hubVpnGatewayEnabled: hubVpnGatewayEnabled
     location: location
     tags: commonTags
+  }
+}
+
+module tenantSubscriptionGovernance './modules/subscription-governance.bicep' = {
+  name: 'tenant-subscription-governance-${tenantId}'
+  scope: subscription()
+  params: {
+    tenantId: tenantId
+    environment: environment
   }
 }
 
@@ -106,95 +139,21 @@ module tenantMonitoring './modules/monitoring.bicep' = {
 
 
 
-// Apply tenant governance policies
-module networkGovernance './modules/governance.bicep' = {
-  name: 'tenant-governance-${tenantId}-network'
-  scope: networkResourceGroup
-  params: {
-    allowedLocations: [
-      location
-    ]
-    tenantId: tenantId
-    environment: environment
-  }
-}
-
-module appGovernance './modules/governance.bicep' = {
-  name: 'tenant-governance-${tenantId}-app'
-  scope: resourceGroup('rg-${tenantId}-app')
-  params: {
-    allowedLocations: [location]
-    tenantId: tenantId
-    environment: environment
-  }
-  dependsOn: [tenantResources]
-}
-
-module dataGovernance './modules/governance.bicep' = {
-  name: 'tenant-governance-${tenantId}-data'
-  scope: resourceGroup('rg-${tenantId}-data')
-  params: {
-    allowedLocations: [location]
-    tenantId: tenantId
-    environment: environment
-  }
-  dependsOn: [tenantResources]
-}
-
-module monitoringGovernance './modules/governance.bicep' = {
-  name: 'tenant-governance-${tenantId}-monitoring'
-  scope: resourceGroup('rg-${tenantId}-monitoring')
-  params: {
-    allowedLocations: [location]
-    tenantId: tenantId
-    environment: environment
-  }
-  dependsOn: [tenantResources]
-}
-
 // Deployment outputs
 output tenantIdOutput string = tenantId
 output networkResourceGroupName string = networkResourceGroup.name
+output tenantVnetId string = tenantNetworking.outputs.vnetId
 
 // Apply tenant RBAC when group IDs are provided
-module tenantRbacApp './modules/rbac.bicep' = if (!empty(platformGroupObjectId) && !empty(tenantGroupObjectId)) {
-  name: 'tenant-rbac-${tenantId}-app'
-  scope: resourceGroup('rg-${tenantId}-app')
+module tenantRbac './modules/rbac.bicep' = if (!empty(platformGroupObjectId) || !empty(tenantGroupObjectId) || !empty(githubActionsPrincipalObjectId)) {
+  name: 'tenant-rbac-${tenantId}'
+  scope: subscription()
   params: {
     platformGroupObjectId: platformGroupObjectId
     tenantGroupObjectId: tenantGroupObjectId
+    githubActionsPrincipalObjectId: githubActionsPrincipalObjectId
   }
-  dependsOn: [tenantResources]
-}
-
-module tenantRbacData './modules/rbac.bicep' = if (!empty(platformGroupObjectId) && !empty(tenantGroupObjectId)) {
-  name: 'tenant-rbac-${tenantId}-data'
-  scope: resourceGroup('rg-${tenantId}-data')
-  params: {
-    platformGroupObjectId: platformGroupObjectId
-    tenantGroupObjectId: tenantGroupObjectId
-  }
-  dependsOn: [tenantResources]
-}
-
-module tenantRbacMonitoring './modules/rbac.bicep' = if (!empty(platformGroupObjectId) && !empty(tenantGroupObjectId)) {
-  name: 'tenant-rbac-${tenantId}-monitoring'
-  scope: resourceGroup('rg-${tenantId}-monitoring')
-  params: {
-    platformGroupObjectId: platformGroupObjectId
-    tenantGroupObjectId: tenantGroupObjectId
-  }
-  dependsOn: [tenantResources]
-}
-
-module tenantRbacNetwork './modules/rbac.bicep' = if (!empty(platformGroupObjectId) && !empty(tenantGroupObjectId)) {
-  name: 'tenant-rbac-${tenantId}-network'
-  scope: networkResourceGroup
-  params: {
-    platformGroupObjectId: platformGroupObjectId
-    tenantGroupObjectId: tenantGroupObjectId
-  }
-  dependsOn: [tenantNetworking]
+  dependsOn: [tenantResources, tenantNetworking]
 }
 
 // Configure tenant budget and FinOps controls
@@ -206,11 +165,16 @@ module tenantFinOps './modules/finops.bicep' = {
     monthlyBudgetAmount: monthlyBudgetAmount
     budgetContactEmail: budgetContactEmail
     budgetStartDate: budgetStartDate
-    resourceGroupNames: [
-      networkResourceGroup.name
-      'rg-${tenantId}-app'
-      'rg-${tenantId}-data'
-      'rg-${tenantId}-monitoring'
-    ]
+  }
+}
+
+module hubSidePeering './modules/hub-peering.bicep' = if (!empty(hubVnetId)) {
+  name: 'tenant-hub-peering-${tenantId}'
+  scope: resourceGroup(hubSubscriptionId, hubResourceGroupName)
+  params: {
+    hubVnetName: hubVnetName
+    spokeVnetId: tenantNetworking.outputs.vnetId
+    tenantId: tenantId
+    vpnGatewayEnabled: hubVpnGatewayEnabled
   }
 }
