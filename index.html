@@ -36,6 +36,29 @@
     .history-table td,.history-table th{padding:9px}.report-table td:first-child{min-width:190px}.report-table td:nth-child(2){min-width:155px}
     dialog{border:1px solid var(--line);border-radius:7px;max-width:480px;width:calc(100% - 32px);padding:24px;color:inherit;background:var(--surface);box-shadow:0 18px 60px #0003}
     dialog::backdrop{background:#18231dcc}dialog h2{margin:0 0 8px;font-size:19px}dialog p{line-height:1.5;color:var(--muted)}
+    .tenant-dialog{width:min(1120px,calc(100% - 28px));max-width:none;max-height:92vh;padding:20px;overflow:hidden}
+    .tenant-dialog-head{display:flex;justify-content:space-between;align-items:center;gap:16px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+    .tenant-dialog-head h2{margin:0;font-size:20px;font-weight:650}
+    .tenant-dialog-body{max-height:calc(92vh - 82px);overflow:auto;padding:14px 4px 4px}
+    .finops-tenant{padding:0;overflow:hidden}
+    .finops-tenant>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 20px}
+    .finops-tenant>summary::-webkit-details-marker{display:none}
+    .finops-tenant>summary:after{content:'+';color:var(--green);font-size:20px;font-weight:500}
+    .finops-tenant[open]>summary:after{content:'−'}
+    .tenant-summary-copy{display:grid;gap:4px;min-width:0}
+    .tenant-summary-copy strong{font-size:15px;font-weight:600}
+    .tenant-summary-copy small,.tenant-summary-metrics small{color:var(--muted);font-size:11px;overflow-wrap:anywhere}
+    .tenant-summary-metrics{display:flex;align-items:center;gap:14px;color:var(--muted);font-size:12px}
+    .finops-detail{padding:4px 20px 20px;border-top:1px solid var(--line)}
+    .finops-detail h3{font-size:14px;font-weight:600;margin:20px 0 10px}
+    .finops-detail .metric-value{font-size:20px;font-weight:600}
+    .finops-detail .card-sub{margin-top:8px}
+    .trend-chart{width:100%;height:auto;display:block;overflow:visible}
+    .trend-chart text{font:10px system-ui,sans-serif;fill:#758176}
+    .trend-chart .gridline{stroke:#e5e6dc;stroke-width:1}
+    .trend-chart .trend-line{fill:none;stroke:#4d8058;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+    .trend-chart .trend-point{fill:#4d8058;stroke:#fff;stroke-width:2}
+    .finops-detail .resource-list li small{color:var(--muted)}
     @media(max-width:850px){aside{position:static;height:auto;overflow:visible}.side-note{display:none}}
   </style>
 </head>
@@ -58,6 +81,7 @@
         <div class="nav-label">Platform administration</div>
         <button class="nav-item" data-page="admin-dashboard">Dashboard</button>
         <button class="nav-item" data-page="tenants">Tenants and requests</button>
+        <button class="nav-item" data-page="finops">FinOps and costs</button>
       </nav>
       <div class="side-note"><strong id="identityNoteTitle">Public request portal</strong><span id="identityNote">Submit and track requests with a private request token. Admin tools require sign-in.</span></div>
     </aside>
@@ -108,7 +132,7 @@
       </section>
 
       <section class="page" id="page-admin-dashboard">
-        <div class="page-head"><div><div class="eyebrow">Administrator portal</div><h1>Provisioning overview</h1><p class="lead">Live counts are derived from tenant records returned by FastAPI.</p></div><div class="toolbar"><button class="btn secondary" id="downloadEvaluationEvidence">Download evaluation evidence</button><button class="btn secondary" id="refreshButton">Refresh</button></div></div>
+        <div class="page-head"><div><div class="eyebrow">Administrator portal</div><h1>Provisioning overview</h1><p class="lead">Live counts are derived from tenant records returned by FastAPI.</p></div><div class="toolbar"><button class="btn secondary" id="downloadEvaluationEvidence">Download evaluation reports</button><button class="btn secondary" id="refreshButton">Refresh</button></div></div>
         <div class="grid metrics">
           <div class="metric"><div class="metric-label">Total requests</div><div class="metric-value" id="metricTotal">—</div></div>
           <div class="metric"><div class="metric-label">Active</div><div class="metric-value" id="metricActive">—</div></div>
@@ -124,15 +148,28 @@
       </section>
     </main>
   </div>
+  <dialog id="tenantDetailsDialog" class="tenant-dialog" aria-labelledby="tenantDetailsTitle"><div class="tenant-dialog-head"><h2 id="tenantDetailsTitle">Tenant details</h2><button class="btn secondary" id="closeTenantDetails" type="button">Close</button></div><div class="tenant-dialog-body" id="tenantDetailsContent"></div></dialog>
   <dialog id="confirmDialog" aria-labelledby="confirmTitle"><form method="dialog" id="confirmForm"><h2 id="confirmTitle">Confirm action</h2><p id="confirmMessage"></p><div id="confirmInputWrap" class="field hidden"><label id="confirmInputLabel" for="confirmInput">Confirmation</label><input id="confirmInput" autocomplete="off"></div><div class="actions"><button class="btn secondary" value="cancel">Cancel</button><button class="btn danger" id="confirmAccept" value="confirm">Continue</button></div></form></dialog>
 
   <script>
-    const state = { config: null, catalog: null, tenants: [], publicRequests: [], auth: null, adminKey: sessionStorage.getItem("cloudinabox.adminKey") || "", currentPage: "request", mode: "customer", busy: false, expandedTenantId: null };
+    const state = { config: null, catalog: null, tenants: [], publicRequests: [], auth: null, adminKey: sessionStorage.getItem("cloudinabox.adminKey") || "", currentPage: "request", mode: "customer", busy: false, expandedTenantId: null, selectedTenantId: null };
     const $ = id => document.getElementById(id);
     const requestStorageKey = "cloudinabox.privateRequests";
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
     const formatMoney = amount => amount == null ? "Not recorded" : new Intl.NumberFormat(undefined,{style:"currency",currency:"EUR",maximumFractionDigits:0}).format(Number(amount));
     const formatCost = (amount,currency) => amount == null ? "—" : new Intl.NumberFormat(undefined,{style:"currency",currency:currency||"EUR",maximumFractionDigits:2}).format(Number(amount));
+    function costTrendChart(rows,currency="EUR") {
+      if(!rows?.length) return `<div class="empty">No measured daily costs are available yet.</div>`;
+      const width=720,height=220,left=48,right=16,top=16,bottom=38,plotW=width-left-right,plotH=height-top-bottom;
+      const values=rows.map(row=>Number(row.amount)||0), max=Math.max(...values,0.01);
+      const points=values.map((value,index)=>({x:left+(rows.length===1?plotW/2:index*plotW/(rows.length-1)),y:top+plotH-(value/max)*plotH,value,date:String(rows[index].date||"")}));
+      const grid=[0,.5,1].map(fraction=>{const y=top+plotH*(1-fraction);return `<line class="gridline" x1="${left}" y1="${y}" x2="${width-right}" y2="${y}"/><text x="${left-8}" y="${y+3}" text-anchor="end">${escapeHtml(formatCost(max*fraction,currency))}</text>`}).join("");
+      const line=points.map(point=>`${point.x},${point.y}`).join(" ");
+      const circles=points.map(point=>`<circle class="trend-point" cx="${point.x}" cy="${point.y}" r="3"><title>${escapeHtml(point.date)} · ${escapeHtml(formatCost(point.value,currency))}</title></circle>`).join("");
+      const labelIndexes=[...new Set([0,Math.floor((rows.length-1)/2),rows.length-1])];
+      const labels=labelIndexes.map(index=>{const point=points[index];return `<text x="${point.x}" y="${height-9}" text-anchor="middle">${escapeHtml(point.date.slice(5))}</text>`}).join("");
+      return `<svg class="trend-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Measured Azure cost over time">${grid}<polyline class="trend-line" points="${line}"/>${circles}${labels}</svg>`;
+    }
 
     async function api(path, options = {}) {
       const headers={"Content-Type":"application/json",...(state.adminKey?{"X-Portal-Admin-Key":state.adminKey}:{}),...(options.headers||{})};
@@ -279,6 +316,7 @@
         if (state.auth?.is_admin) state.tenants = await api("/tenants");
         else await refreshPublicRequests();
       renderAll();
+      if($("tenantDetailsDialog").open && state.selectedTenantId) showDetails(state.selectedTenantId);
       if (state.tenants.some(t => ["provisioning", "deprovisioning"].includes(t.status) || ["queued", "verifying"].includes(t.verification_state))) window.setTimeout(refreshTenants, 1800);
     }
     function renderAll() { renderDashboard(); renderAdminTenants(); renderMyTenants(); renderFinops(); renderRequestProgress(); }
@@ -297,20 +335,15 @@
       $("metricProvisioning").textContent = counts.provisioning; $("metricFailed").textContent = counts.failed;
       const recent = [...state.tenants].slice(0,6);
       $("adminRecent").innerHTML = recent.length ? renderTenantTable(recent, false) : `<div class="empty">No tenant requests have been recorded yet.</div>`;
-      $("adminRecent").querySelectorAll("[data-detail]").forEach(button => button.addEventListener("click", () => { state.expandedTenantId=button.dataset.detail; showPage("tenants"); renderAdminTenants(); }));
+      $("adminRecent").querySelectorAll("[data-detail]").forEach(button => button.addEventListener("click", () => { showPage("tenants"); openTenantDetails(button.dataset.detail); }));
     }
     function renderTenantTable(tenants, admin) {
-      return `<div class="table-wrap"><table class="table"><thead><tr><th>Tenant</th><th>Status</th><th>Environment / region</th><th>Budget</th>${admin ? "<th>Action</th>" : ""}</tr></thead><tbody>${tenants.map(t => `<tr><td><button class="tenant-link" aria-expanded="${admin && state.expandedTenantId===t.tenant_id}" data-detail="${escapeHtml(t.tenant_id)}">${escapeHtml(t.tenant_name || t.tenant_id)}</button><div class="mono muted">${escapeHtml(t.tenant_id)}</div></td><td>${statusPill(t.status)}</td><td>${escapeHtml(t.environment || "Not retained")} · ${escapeHtml(t.location || "Not retained")}</td><td>${formatMoney(t.monthly_budget)}</td>${admin ? `<td><button class="btn link" data-detail="${escapeHtml(t.tenant_id)}">${state.expandedTenantId===t.tenant_id ? "Hide details" : "Details"}</button></td>` : ""}</tr>${admin && state.expandedTenantId===t.tenant_id ? `<tr class="expanded-row"><td colspan="5"><div class="expanded-details" id="detailsMount-${escapeHtml(t.tenant_id)}"><span class="muted">Loading tenant details…</span></div></td></tr>` : ""}`).join("")}</tbody></table></div>`;
+      return `<div class="table-wrap"><table class="table"><thead><tr><th>Tenant</th><th>Status</th><th>Environment / region</th><th>Budget alert</th>${admin ? "<th>Action</th>" : ""}</tr></thead><tbody>${tenants.map(t => `<tr><td><button class="tenant-link" data-detail="${escapeHtml(t.tenant_id)}">${escapeHtml(t.tenant_name || t.tenant_id)}</button><div class="mono muted">${escapeHtml(t.tenant_id)}</div></td><td>${statusPill(t.status)}</td><td>${escapeHtml(t.environment || "Not retained")} · ${escapeHtml(t.location || "Not retained")}</td><td>${formatMoney(t.monthly_budget)}</td>${admin ? `<td><button class="btn link" data-detail="${escapeHtml(t.tenant_id)}">View details</button></td>` : ""}</tr>`).join("")}</tbody></table></div>`;
     }
     function renderAdminTenants() {
       const mount = $("adminTenantTable"); if (!mount) return;
       mount.innerHTML = state.tenants.length ? renderTenantTable(state.tenants, true) : `<div class="empty">No tenant requests have been recorded yet.</div>`;
-      mount.querySelectorAll("[data-detail]").forEach(button => button.addEventListener("click", () => {
-        const id=button.dataset.detail;
-        state.expandedTenantId=state.expandedTenantId===id?null:id;
-        renderAdminTenants();
-      }));
-      if(state.expandedTenantId && state.tenants.some(t=>t.tenant_id===state.expandedTenantId)) showDetails(state.expandedTenantId);
+      mount.querySelectorAll("[data-detail]").forEach(button => button.addEventListener("click", () => openTenantDetails(button.dataset.detail)));
     }
     function renderMyTenants() {
       const mine = state.publicRequests;
@@ -318,20 +351,37 @@
       $("myTenants").querySelectorAll("[data-public-retry]").forEach(button => button.addEventListener("click", () => retryPublicRequest(button.dataset.publicRetry)));
     }
     function renderFinops() {
-      const mine = state.auth?.is_admin ? state.tenants : state.publicRequests;
+      const adminView = state.mode === "admin" && state.auth?.is_admin;
+      const mine = adminView ? state.tenants : state.publicRequests;
       $("customerFinops").innerHTML = mine.length ? mine.map(t => {
         const cost=t.verification_report?.cost, currency=cost?.currency||"EUR", budget=Number(t.monthly_budget||0), spent=Number(cost?.month_to_date||0);
         const utilization=budget>0&&cost?.state==="available"?spent/budget*100:null;
-        const daily=cost?.daily||[], max=Math.max(0,...daily.map(row=>Number(row.amount||0)));
-        const chart=daily.length?`<div class="cost-chart" role="img" aria-label="Daily measured Azure costs">${daily.map(row=>`<div class="cost-bar"><span title="${escapeHtml(row.date)}: ${escapeHtml(formatCost(row.amount,currency))}" style="height:${max?Math.max(3,Number(row.amount)/max*100):3}%"></span><small>${escapeHtml(String(row.date).slice(-2))}</small></div>`).join("")}</div>`:`<div class="empty">${cost?.error?`Cost query error: ${escapeHtml(cost.error)}`:"Azure has not returned daily cost readings for this month."}</div>`;
+        const daily=cost?.daily||[];
         if(t.status==="success"&&snapshotNeedsRefresh(t)) queueFinopsSnapshot(t);
         const monitoring=finopsEnvironmentMarkup(t);
-        return `<article class="card"><div class="page-head"><div><h2>${escapeHtml(t.tenant_name||t.tenant_id)}</h2><p class="card-sub">Measured month-to-date usage and configured budget alert</p></div><div class="toolbar">${statusPill(t.status)}${t.status==="success"?`<button class="btn secondary" data-snapshot-refresh="${escapeHtml(t.tenant_id)}">Refresh Azure data</button>`:""}</div></div><div class="grid metrics"><div class="metric"><div class="metric-label">Monthly alert</div><div class="metric-value">${formatMoney(t.monthly_budget)}</div></div><div class="metric"><div class="metric-label">Measured spend</div><div class="metric-value">${cost?.state==="available"?formatCost(spent,currency):"—"}</div></div><div class="metric"><div class="metric-label">Budget remaining</div><div class="metric-value">${cost?.state==="available"?formatCost(budget-spent,currency):"—"}</div></div><div class="metric"><div class="metric-label">Utilisation</div><div class="metric-value">${utilization==null?"—":`${utilization.toFixed(1)}%`}</div></div></div>${utilization!=null?`<div class="budget-track"><span style="width:${Math.min(100,utilization)}%"></span></div>`:""}<h3>Daily measured costs</h3>${chart}<p class="footer-note">Azure budgets send alerts; they do not cap usage or stop resources. ${cost?.state==="available"?"Cost Management values are returned directly by Azure.":"Actual costs are shown only when Azure Cost Management returns them."}</p>${monitoring}</article>`;
+        const admin=Boolean(adminView);
+        const reportButton=admin?`<button class="btn secondary" data-tenant-report="${escapeHtml(t.tenant_id)}">Download tenant report</button>`:"";
+        return `<details class="card finops-tenant"><summary><span class="tenant-summary-copy"><strong>${escapeHtml(t.tenant_name||t.tenant_id)}</strong><small>${escapeHtml(t.tenant_id)} · ${escapeHtml(t.location||"Region not recorded")}</small></span><span class="tenant-summary-metrics">${statusPill(t.status)}<small>Alert ${formatMoney(t.monthly_budget)}</small>${cost?.state==="available"?`<small>Spend ${formatCost(spent,currency)}</small>`:""}</span></summary><div class="finops-detail"><div class="toolbar" style="justify-content:flex-end;margin-top:14px">${reportButton}${t.status==="success"?`<button class="btn secondary" data-snapshot-refresh="${escapeHtml(t.tenant_id)}">Refresh Azure data</button>`:""}</div><div class="grid metrics" style="margin-top:16px"><div class="metric"><div class="metric-label">Monthly alert</div><div class="metric-value">${formatMoney(t.monthly_budget)}</div></div><div class="metric"><div class="metric-label">Measured spend</div><div class="metric-value">${cost?.state==="available"?formatCost(spent,currency):"—"}</div></div><div class="metric"><div class="metric-label">Budget remaining</div><div class="metric-value">${cost?.state==="available"?formatCost(budget-spent,currency):"—"}</div></div><div class="metric"><div class="metric-label">Utilisation</div><div class="metric-value">${utilization==null?"—":`${utilization.toFixed(1)}%`}</div></div></div>${utilization!=null?`<div class="budget-track"><span style="width:${Math.min(100,Math.max(0,utilization))}%"></span></div>`:""}<h3>Measured Azure cost over time</h3>${costTrendChart(daily,currency)}${cost?.error?`<p class="footer-note">Cost Management could not return data for this tenant.</p>`:""}<p class="footer-note">The budget is an alert threshold, not a spending cap. Cost values are shown only when Azure Cost Management returns them.</p>${monitoring}</div></details>`;
       }).join("") : `<div class="empty">No tracked tenant budget is available in this session. Submit or track a request to view its budget.</div>`;
+      $("customerFinops").querySelectorAll("[data-tenant-report]").forEach(button=>button.addEventListener("click",()=>downloadTenantReport(button.dataset.tenantReport,button)));
       $("customerFinops").querySelectorAll("[data-snapshot-refresh]").forEach(button=>button.addEventListener("click",()=>{
         const tenant=mine.find(item=>item.tenant_id===button.dataset.snapshotRefresh);
         if(tenant) queueFinopsSnapshot(tenant,true);
       }));
+    }
+
+    async function downloadTenantReport(id,button) {
+      if(button) button.disabled=true;
+      try {
+        const response=await fetch(`/admin/tenants/${encodeURIComponent(id)}/finops-report.csv`,{headers:{"X-Portal-Admin-Key":state.adminKey},cache:"no-store"});
+        if(!response.ok) {
+          const data=await response.json().catch(()=>({}));
+          throw new Error(data.detail||`Could not download report (${response.status}).`);
+        }
+        const blob=await response.blob(), url=URL.createObjectURL(blob), link=document.createElement("a");
+        link.href=url; link.download=`tenant-${id}-finops-report.csv`; link.click(); URL.revokeObjectURL(url);
+      } catch(error) { alert(error.message); }
+      finally { if(button) button.disabled=false; }
     }
     function snapshotNeedsRefresh(tenant) {
       if(["queued","verifying"].includes(tenant.verification_state)) return false;
@@ -358,13 +408,13 @@
       if(!report) return `<section class="finops-environment"><h3>Azure resources and monitoring</h3><div class="empty">A snapshot will appear here after Azure returns the tenant inventory.</div></section>`;
       const groups=report.resource_groups||[];
       const resourceRows=groups.flatMap(group=>group.error?
-        [`<tr><td>${escapeHtml(group.name)}</td><td colspan="4">— <span class="muted">${escapeHtml(group.error)}</span></td></tr>`]:
+        [`<tr><td>${escapeHtml(group.name)}</td><td colspan="4">—</td></tr>`]:
         group.resources?.length?group.resources.map(resource=>`<tr><td>${escapeHtml(group.name)}</td><td>${escapeHtml(resource.name)}</td><td>${escapeHtml(resource.type)}</td><td>${escapeHtml(resource.provisioning_state||"—")}</td><td>${resource.metrics?.length?resource.metrics.map(metric=>`${escapeHtml(metric.name)}: ${escapeHtml(metric.average)} ${escapeHtml(metric.unit||"")}`).join(" · "):"—"}</td></tr>`):
         [`<tr><td>${escapeHtml(group.name)}</td><td colspan="4">—</td></tr>`]);
       const inventory=groups.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Resource group</th><th>Resource</th><th>Type</th><th>State</th><th>Azure Monitor readings</th></tr></thead><tbody>${resourceRows.join("")}</tbody></table></div>`:`<div class="empty">—</div>`;
       const tables=report.logs?.tables||[];
-      const logMarkup=report.logs?.error?`<div class="notice warn">Log Analytics: ${escapeHtml(report.logs.error)}</div>`:tables.length?tables.map(table=>`<div class="table-wrap"><table class="table"><thead><tr>${(table.columns||[]).map(col=>`<th>${escapeHtml(col.name)}</th>`).join("")}</tr></thead><tbody>${(table.rows||[]).map(row=>`<tr>${row.map(cell=>`<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`).join(""):`<div class="empty">No Log Analytics events were returned for the last 24 hours.</div>`;
-      return `<section class="finops-environment"><h3>Azure resources and monitoring</h3><p class="card-sub">Snapshot ${escapeHtml(report.verified_at||"—")} · Inventory and readings are returned directly by Azure.</p>${report.error?`<div class="notice warn">Azure query: ${escapeHtml(report.error)}</div>`:""}${inventory}<h3>Monitoring · Log Analytics</h3>${logMarkup}</section>`;
+      const logMarkup=report.logs?.error?`<div class="empty">No Log Analytics events are available yet. A sample or customer workload can send telemetry to this workspace.</div>`:tables.length?tables.map(table=>`<div class="table-wrap"><table class="table"><thead><tr>${(table.columns||[]).map(col=>`<th>${escapeHtml(col.name)}</th>`).join("")}</tr></thead><tbody>${(table.rows||[]).map(row=>`<tr>${row.map(cell=>`<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`).join(""):`<div class="empty">No Log Analytics events are available yet. A sample or customer workload can send telemetry to this workspace.</div>`;
+      return `<section class="finops-environment"><h3>Azure resources and monitoring</h3><p class="card-sub">Azure resource inventory and readings</p>${inventory}<h3>Monitoring · Log Analytics</h3>${logMarkup}</section>`;
     }
     function detailItem(label,value) { return `<div class="detail-item"><div class="detail-key">${escapeHtml(label)}</div><div class="detail-value">${escapeHtml(value || "Not recorded")}</div></div>`; }
     function verificationMarkup(tenant) {
@@ -374,19 +424,28 @@
       if (!report) return `<div class="notice warn">Azure verification ${escapeHtml(tenant.verification_state)}. No report was returned.</div>`;
       const rows=(report.checks||[]).map(check=>`<tr><td>${escapeHtml(check.name)}</td><td>${check.passed?"Passed":"Not verified"}</td><td>${escapeHtml(check.expected)}</td><td>${escapeHtml(JSON.stringify(check.actual))}</td><td class="mono">${escapeHtml(check.resource_id)}</td></tr>`).join("");
       const groups=report.resource_groups||[];
-      const resourceMarkup=groups.length?`<h3>Azure environment · resource groups</h3><div class="grid service-grid">${groups.map(group=>`<article class="card"><h3>${escapeHtml(group.name)}</h3><p class="card-sub">${group.resources?.length??0} resources · ${escapeHtml(group.state)}</p>${group.error?`<div class="notice warn">Inventory unavailable: ${escapeHtml(group.error)}</div>`:group.resources?.length?`<ul class="resource-list">${group.resources.map(resource=>`<li><strong>${escapeHtml(resource.name)}</strong><span>${escapeHtml(resource.type)}</span><small>${escapeHtml(resource.location||"Region unavailable")} · ${escapeHtml(resource.provisioning_state||"state not exposed")}</small>${resource.metrics?.length?`<div class="metric-readings">${resource.metrics.map(metric=>`<span>${escapeHtml(metric.name)}: ${escapeHtml(metric.average)} ${escapeHtml(metric.unit||"")} <small>${escapeHtml(metric.timestamp||"")}</small></span>`).join("")}</div>`:`<small>${resource.metrics_state==="not_supported"?"No Azure Monitor metrics are defined for this resource type.":resource.metrics_state==="no_data"?"No metric readings returned in the last 24 hours.":resource.metrics_error?`Metric query unavailable: ${escapeHtml(resource.metrics_error)}`:"Metric data is unavailable."}</small>`}</li>`).join("")}</ul>`:`<p class="footer-note">Azure returned no resources for this group.</p>`}</article>`).join("")}</div>`:`<div class="empty">No Azure resource inventory has been collected yet.</div>`;
-      const cost=report.cost||{}, currency=cost.currency||"EUR", daily=cost.daily||[], max=Math.max(0,...daily.map(row=>Number(row.amount||0)));
-      const costMarkup=`<h3>FinOps · actual Azure cost</h3><div class="grid metrics"><div class="metric"><div class="metric-label">Tenant budget alert</div><div class="metric-value">${formatMoney(tenant.monthly_budget)}</div></div><div class="metric"><div class="metric-label">Month to date</div><div class="metric-value">${cost.state==="available"?formatCost(cost.month_to_date,currency):"—"}</div></div><div class="metric"><div class="metric-label">Data source</div><div class="metric-value">${cost.state==="available"?"Azure Cost Management":"—"}</div></div><div class="metric"><div class="metric-label">Budget remaining*</div><div class="metric-value">${cost.state==="available"?formatCost(Number(tenant.monthly_budget||0)-Number(cost.month_to_date||0),currency):"—"}</div></div></div>${cost.error?`<div class="notice warn">Cost Management did not return cost data: ${escapeHtml(cost.error)}</div>`:""}${daily.length?`<div class="cost-chart" role="img" aria-label="Daily Azure cost">${daily.map(row=>`<div class="cost-bar"><span title="${escapeHtml(row.date)} ${escapeHtml(formatCost(row.amount,currency))}" style="height:${max?Math.max(3,Number(row.amount)/max*100):3}%"></span><small>${escapeHtml(String(row.date).slice(-2))}</small></div>`).join("")}</div>`:`<div class="empty">Azure returned no daily cost rows for this tenant’s resource groups in the current month.</div>`}<p class="footer-note">*Budget remaining is the configured alert minus measured month-to-date cost; the alert does not stop spending.</p>`;
+      const resourceMarkup=groups.length?`<h3>Azure environment · resource groups</h3><div class="grid service-grid">${groups.map(group=>`<article class="card"><h3>${escapeHtml(group.name)}</h3><p class="card-sub">${group.resources?.length??0} resources</p>${group.error?`<p class="footer-note">—</p>`:group.resources?.length?`<ul class="resource-list">${group.resources.map(resource=>`<li><strong>${escapeHtml(resource.name)}</strong><span>${escapeHtml(resource.type)}</span><small>${escapeHtml(resource.location||"—")} · ${escapeHtml(resource.provisioning_state||"—")}</small>${resource.metrics?.length?`<div class="metric-readings">${resource.metrics.map(metric=>`<span>${escapeHtml(metric.name)}: ${escapeHtml(metric.average)} ${escapeHtml(metric.unit||"")}</span>`).join("")}</div>`:`<small>—</small>`}</li>`).join("")}</ul>`:`<p class="footer-note">—</p>`}</article>`).join("")}</div>`:`<div class="empty">No Azure resource inventory has been collected yet.</div>`;
+      const cost=report.cost||{}, currency=cost.currency||"EUR", daily=cost.daily||[];
+      const costMarkup=`<h3>FinOps · actual Azure cost</h3><div class="grid metrics"><div class="metric"><div class="metric-label">Tenant budget alert</div><div class="metric-value">${formatMoney(tenant.monthly_budget)}</div></div><div class="metric"><div class="metric-label">Month to date</div><div class="metric-value">${cost.state==="available"?formatCost(cost.month_to_date,currency):"—"}</div></div><div class="metric"><div class="metric-label">Data source</div><div class="metric-value">${cost.state==="available"?"Azure Cost Management":"—"}</div></div><div class="metric"><div class="metric-label">Budget remaining*</div><div class="metric-value">${cost.state==="available"?formatCost(Number(tenant.monthly_budget||0)-Number(cost.month_to_date||0),currency):"—"}</div></div></div>${daily.length?costTrendChart(daily,currency):`<div class="empty">No measured daily costs are available yet.</div>`}<p class="footer-note">*Budget remaining is the configured alert minus measured month-to-date cost; the alert does not stop spending.</p>`;
       let logsMarkup="<h3>Monitoring · Log Analytics</h3>";
       const logTables=report.logs?.tables||[];
-      if(report.logs?.error) logsMarkup+=`<div class="notice warn">Log Analytics query unavailable: ${escapeHtml(report.logs.error)}</div>`;
-      else if(!logTables.length) logsMarkup+='<div class="empty">The workspace query returned no tables or telemetry for the selected query.</div>';
+      if(report.logs?.error) logsMarkup+='<div class="empty">No Log Analytics events are available yet. A sample or customer workload can send telemetry to this workspace.</div>';
+      else if(!logTables.length) logsMarkup+='<div class="empty">No Log Analytics events are available yet. A sample or customer workload can send telemetry to this workspace.</div>';
       else logsMarkup+=logTables.map(table=>`<div class="table-wrap"><table class="table"><thead><tr>${(table.columns||[]).map(col=>`<th>${escapeHtml(col.name)}</th>`).join("")}</tr></thead><tbody>${(table.rows||[]).map(row=>`<tr>${row.map(cell=>`<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`).join("");
-      return `<section><h3>Azure resource verification</h3><p class="card-sub">Checked ${escapeHtml(report.verified_at||"time not recorded")} · ${escapeHtml(report.passed??0)} of ${escapeHtml(report.total??(report.checks||[]).length)} baseline checks passed · Subscription ${escapeHtml(report.subscription_id||tenant.subscription_id||"unknown")}</p>${report.error?`<div class="notice error">${escapeHtml(report.error)}</div>`:""}${rows?`<details><summary>Baseline deployment checks</summary><div class="table-wrap"><table class="table report-table"><thead><tr><th>Azure resource</th><th>Result</th><th>Expected</th><th>Observed</th><th>Resource ID</th></tr></thead><tbody>${rows}</tbody></table></div></details>`:""}${resourceMarkup}${costMarkup}${logsMarkup}<p class="footer-note">${escapeHtml(report.telemetry_note||"Resource inventory and readings reflect information returned by Azure at the time shown.")}</p></section>`;
+      return `<section><h3>Azure resource verification</h3><p class="card-sub">${escapeHtml(report.passed??0)} of ${escapeHtml(report.total??(report.checks||[]).length)} baseline checks passed · Subscription ${escapeHtml(report.subscription_id||tenant.subscription_id||"unknown")}</p>${report.error?`<div class="notice error">${escapeHtml(report.error)}</div>`:""}${rows?`<details><summary>Baseline deployment checks</summary><div class="table-wrap"><table class="table report-table"><thead><tr><th>Azure resource</th><th>Result</th><th>Expected</th><th>Observed</th><th>Resource ID</th></tr></thead><tbody>${rows}</tbody></table></div></details>`:""}${resourceMarkup}${costMarkup}${logsMarkup}<p class="footer-note">${escapeHtml(report.telemetry_note||"Resource inventory and readings reflect information returned by Azure.")}</p></section>`;
+    }
+    function openTenantDetails(id) {
+      const tenant=state.tenants.find(item=>item.tenant_id===id);
+      if(!tenant) return;
+      state.selectedTenantId=id;
+      $("tenantDetailsTitle").textContent=tenant.tenant_name||tenant.tenant_id;
+      $("tenantDetailsContent").innerHTML='<p class="muted">Loading tenant details…</p>';
+      if(!$("tenantDetailsDialog").open) $("tenantDetailsDialog").showModal();
+      showDetails(id);
     }
     async function showDetails(id) {
       const t = state.tenants.find(item => item.tenant_id === id); if (!t) return;
-      const mount=$(`detailsMount-${id}`); if (!mount) return;
+      const mount=$("tenantDetailsContent"); if (!mount || state.selectedTenantId!==id) return;
       const basic = `<div class="detail-grid">${detailItem("Tenant ID",t.tenant_id)}${detailItem("Status",t.status)}${detailItem("Contact",t.owner)}${detailItem("Environment",t.environment)}${detailItem("Azure region",t.location)}${detailItem("Subscription",t.subscription_id)}${detailItem("Isolation",t.isolation_model||"Tenant resource groups")}${detailItem("VNet address range",t.address_space)}${detailItem("Monthly budget alert",formatMoney(t.monthly_budget))}${detailItem("Sample workload",t.sample_workload_state||"Not configured")}${detailItem("Created",t.created_at)}${detailItem("Deployment",t.deployment_name)}</div>${t.sample_workload_url?`<p><a href="${escapeHtml(t.sample_workload_url)}" target="_blank" rel="noopener noreferrer">Open sample SaaS application</a></p>`:""}${t.sample_workload_run_url?`<p><a href="${escapeHtml(t.sample_workload_run_url)}" target="_blank" rel="noopener noreferrer">View GitHub Actions deployment logs</a></p>`:""}`;
       const sharedSubscription = String(t.isolation_model||"").startsWith("shared subscription");
       const access = t.status === "success" && sharedSubscription ? `<section class="access-control"><h3>Tenant resource access</h3><p class="footer-note">The provisioning worker cannot change Azure role assignments. A subscription Owner can grant the customer group's Contributor role on these four resource groups: rg-${escapeHtml(id)}-network, rg-${escapeHtml(id)}-app, rg-${escapeHtml(id)}-data, and rg-${escapeHtml(id)}-monitoring.</p></section>` : t.status === "success" ? `<section class="access-control"><h3>Tenant subscription access</h3><p class="footer-note">Assign the customer's Entra security group Contributor access to this dedicated tenant subscription.</p><label for="accessGroup-${escapeHtml(id)}">Entra group object ID</label><input id="accessGroup-${escapeHtml(id)}" type="text" autocomplete="off" placeholder="00000000-0000-0000-0000-000000000000" value="${escapeHtml(t.tenant_group_object_id||"")}"><button class="btn secondary" data-access-save="${escapeHtml(id)}">${t.tenant_group_object_id?"Reapply tenant access":"Assign tenant access"}</button></section>` : "";
@@ -397,7 +456,7 @@
       const verificationButton = t.status === "success" ? `<div class="actions"><button class="btn secondary" data-verify="${escapeHtml(t.tenant_id)}" ${["queued","verifying"].includes(t.verification_state)?"disabled":""}>${t.verification_state==="complete"?"Verify resources again":"Verify actual Azure resources"}</button></div>${verificationMarkup(t)}` : "";
       let history=[];
       try { history=await api(`/tenants/${encodeURIComponent(id)}/history`); } catch {}
-      if (!$(`detailsMount-${id}`)) return;
+      if (!$("tenantDetailsDialog").open || state.selectedTenantId!==id) return;
       mount.innerHTML = basic + access + failure + deprovision + deprovisioned + verificationButton + (history.length ? `<h3>Provisioning history</h3>${historyTable(history)}` : `<h3>Provisioning history</h3><p class="footer-note">No history was retained for this request.</p>`);
       mount.querySelector("[data-retry]")?.addEventListener("click", () => retryTenant(id));
       mount.querySelector("[data-remove]")?.addEventListener("click", () => removeFailed(id));
@@ -421,12 +480,12 @@
       });
     }
     async function verifyTenant(id) {
-      const button=$(`detailsMount-${id}`)?.querySelector("[data-verify]"); if(button) button.disabled=true;
-      try { await api(`/tenants/${encodeURIComponent(id)}/verify`,{method:"POST"}); state.expandedTenantId=id; await refreshTenants(); }
+      const button=$("tenantDetailsContent")?.querySelector("[data-verify]"); if(button) button.disabled=true;
+      try { await api(`/tenants/${encodeURIComponent(id)}/verify`,{method:"POST"}); await refreshTenants(); }
       catch(error) { if(button)button.disabled=false; alert(error.message); }
     }
     async function saveTenantAccess(id) {
-      const input=$(`accessGroup-${id}`), button=$(`detailsMount-${id}`)?.querySelector("[data-access-save]");
+      const input=$(`accessGroup-${id}`), button=$("tenantDetailsContent")?.querySelector("[data-access-save]");
       if(!input?.value.trim()) { alert("Enter the Entra group object ID for this tenant."); return; }
       if(button) button.disabled=true;
       try {
@@ -435,21 +494,21 @@
       } catch(error) { alert(error.message); if(button)button.disabled=false; }
     }
     async function retryTenant(id) {
-      const button = $(`detailsMount-${id}`)?.querySelector("[data-retry]"); if (button) button.disabled = true;
-      try { state.expandedTenantId=id; await api(`/tenants/${encodeURIComponent(id)}/retry`,{method:"POST"}); await refreshTenants(); }
+      const button = $("tenantDetailsContent")?.querySelector("[data-retry]"); if (button) button.disabled = true;
+      try { await api(`/tenants/${encodeURIComponent(id)}/retry`,{method:"POST"}); await refreshTenants(); }
       catch(error) { alert(error.message); if(button)button.disabled=false; }
     }
     async function removeFailed(id) {
       if (!await appConfirm({title:"Remove failed request",message:`Remove the failed portal record for ${id}? This will not delete Azure resources.`})) return;
-      try { await api(`/tenants/${encodeURIComponent(id)}`,{method:"DELETE"}); state.tenants=state.tenants.filter(t=>t.tenant_id!==id); state.expandedTenantId=null; renderAll(); }
+      try { await api(`/tenants/${encodeURIComponent(id)}`,{method:"DELETE"}); state.tenants=state.tenants.filter(t=>t.tenant_id!==id); state.selectedTenantId=null; $("tenantDetailsDialog").close(); renderAll(); }
       catch(error) { alert(error.message); }
     }
     async function deprovisionTenant(id) {
       if (!await appConfirm({title:"Deprovision tenant",message:`Permanently delete the Azure resources for tenant ${id}? This removes its tenant resource groups and budget.`,requiredText:id})) return;
-      const button = $(`detailsMount-${id}`)?.querySelector("[data-deprovision]"); if (button) button.disabled = true;
+      const button = $("tenantDetailsContent")?.querySelector("[data-deprovision]"); if (button) button.disabled = true;
       try {
         await api(`/tenants/${encodeURIComponent(id)}/deprovision`, {method:"POST", body:JSON.stringify({confirm_tenant_id:id})});
-        state.expandedTenantId=id; await refreshTenants();
+        await refreshTenants();
       } catch(error) { alert(error.message); if(button)button.disabled=false; }
     }
     function makeTenantId(name) { return name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,""); }
@@ -464,7 +523,7 @@
         const record=await api("/tenants",{method:"POST",body:JSON.stringify({tenant_id:id,tenant_name:name,owner_email:email,environment:$("environmentTier").value,location:$("azureRegion").value,monthly_budget:budget})});
         saveRequestReference(record.tenant_id,record.request_token);
         state.publicRequests=[{...record},...state.publicRequests.filter(t=>t.tenant_id!==record.tenant_id)]; renderAll();
-        if(state.auth?.is_admin){state.tenants=await api("/tenants");state.expandedTenantId=record.tenant_id;setMode("admin");showPage("tenants");renderAdminTenants()}
+        if(state.auth?.is_admin){state.tenants=await api("/tenants");setMode("admin");showPage("tenants");renderAdminTenants();openTenantDetails(record.tenant_id)}
         else {showPage("my-environment");window.setTimeout(refreshPublicRequests,900)}
       } catch(error) { $("requestFeedback").className="notice error"; $("requestFeedback").textContent=error.message; }
       finally { state.busy=false; button.disabled=false; button.textContent="Submit provisioning request"; }
@@ -519,6 +578,8 @@
     });
     $("authLink").addEventListener("click",event=>{event.preventDefault(); if(state.auth?.is_admin) signOutAdmin(); else setMode("admin");});
     $("adminLogoutButton").addEventListener("click",signOutAdmin);
+    $("closeTenantDetails").addEventListener("click",()=>$("tenantDetailsDialog").close());
+    $("tenantDetailsDialog").addEventListener("close",()=>{state.selectedTenantId=null});
 
     $("customerMode").addEventListener("click",()=>setMode("customer"));
     $("adminMode").addEventListener("click",()=>setMode("admin"));
@@ -531,7 +592,7 @@
         const response=await fetch("/admin/evaluation/evidence.csv",{headers:{"X-Portal-Admin-Key":state.adminKey},cache:"no-store"});
         if(!response.ok) { const body=await response.json().catch(()=>({})); throw new Error(body.detail||`Download failed (${response.status})`); }
         const blob=await response.blob(), url=URL.createObjectURL(blob), link=document.createElement("a");
-        link.href=url; link.download="cloudinabox-evaluation-evidence.csv"; link.click(); URL.revokeObjectURL(url);
+        link.href=url; link.download="cloudinabox-evaluation-reports.csv"; link.click(); URL.revokeObjectURL(url);
       } catch(error) { alert(error.message); }
     });
     $("adminRefresh").addEventListener("click",()=>refreshTenants().catch(e=>alert(e.message)));

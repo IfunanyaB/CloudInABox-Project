@@ -647,7 +647,90 @@ def evaluation_evidence(_: dict = Depends(require_admin)):
     return Response(
         content=output.getvalue(),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": "attachment; filename=cloudinabox-evaluation-evidence.csv"},
+        headers={"Content-Disposition": "attachment; filename=cloudinabox-evaluation-reports.csv"},
+    )
+
+
+@app.get("/admin/tenants/{tenant_id}/finops-report.csv")
+def tenant_finops_report(tenant_id: str, _: dict = Depends(require_admin)):
+    """Download one tenant's stored Azure, cost, monitoring, and lifecycle report."""
+    tenant = get_record(tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant request not found.")
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow([
+        "record_type", "tenant_id", "tenant_name", "status", "resource_group",
+        "resource_name", "resource_type", "field", "value", "unit", "date_utc",
+        "details",
+    ])
+
+    def row(record_type: str, *, group: str = "", resource: str = "", resource_type: str = "",
+            field: str = "", value: object = "", unit: str = "", date_utc: str = "", details: str = "") -> None:
+        writer.writerow([
+            record_type, tenant_id, tenant.get("tenant_name", ""), tenant.get("status", ""),
+            group, resource, resource_type, field, value, unit, date_utc, details,
+        ])
+
+    for field in ("owner", "environment", "location", "subscription_id", "address_space",
+                  "monthly_budget", "created_at", "deployment_name", "isolation_model"):
+        row("tenant", field=field, value=tenant.get(field, ""))
+
+    report = tenant.get("verification_report") or {}
+    cost = report.get("cost") or {}
+    row("finops", field="budget_alert", value=tenant.get("monthly_budget", ""), unit="EUR/month")
+    row("finops", field="month_to_date_cost", value=cost.get("month_to_date", ""),
+        unit=cost.get("currency") or "", details=cost.get("state", "not collected"))
+    for item in cost.get("daily", []):
+        row("daily_cost", field="measured_cost", value=item.get("amount", ""),
+            unit=cost.get("currency") or "", date_utc=item.get("date", ""))
+    for item in cost.get("by_resource_group", []):
+        row("resource_group_cost", group=item.get("name", ""), field="measured_cost",
+            value=item.get("amount", ""), unit=cost.get("currency") or "")
+    if cost.get("error"):
+        row("finops", field="cost_query", details=cost["error"])
+
+    for group in report.get("resource_groups", []):
+        if group.get("error"):
+            row("resource_group", group=group.get("name", ""), field="inventory", details=group["error"])
+        for resource in group.get("resources", []):
+            row("resource", group=group.get("name", ""), resource=resource.get("name", ""),
+                resource_type=resource.get("type", ""), field="provisioning_state",
+                value=resource.get("provisioning_state", ""), details=resource.get("location", ""))
+            for metric in resource.get("metrics", []):
+                row("metric", group=group.get("name", ""), resource=resource.get("name", ""),
+                    resource_type=resource.get("type", ""), field=metric.get("name", ""),
+                    value=metric.get("average", ""), unit=metric.get("unit", ""),
+                    date_utc=metric.get("timestamp", ""))
+
+    logs = report.get("logs") or {}
+    for table in logs.get("tables", []):
+        columns = [column.get("name", "") for column in table.get("columns", [])]
+        for values in table.get("rows", []):
+            row("log", field=table.get("name", "Log Analytics"),
+                details=json.dumps(dict(zip(columns, values)), ensure_ascii=False, default=str))
+    if logs.get("error"):
+        row("monitoring", field="log_analytics_query", details=logs["error"])
+
+    for check in report.get("checks", []):
+        row("verification", resource=check.get("name", ""), field="passed" if check.get("passed") else "not_passed",
+            value=json.dumps(check.get("actual", ""), ensure_ascii=False, default=str),
+            details=f"Expected: {check.get('expected', '')}; ID: {check.get('resource_id', '')}")
+
+    with db_session() as connection:
+        events = db_execute(connection,
+            "SELECT status,phase,message,created_at FROM tenant_request_events WHERE tenant_id=? ORDER BY id",
+            (tenant_id,),
+        ).fetchall()
+    for event in events:
+        row("lifecycle", field=event["phase"], value=event["status"],
+            date_utc=event["created_at"], details=event["message"])
+
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="tenant-{tenant_id}-finops-report.csv"'},
     )
 
 

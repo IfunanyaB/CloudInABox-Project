@@ -541,10 +541,21 @@ def verify_tenant_resources(tenant: dict[str, Any]) -> dict[str, Any]:
                         metric_names = [item.get("name", {}).get("value") for item in definition_items[:3]]
                         metric_names = [name for name in metric_names if name]
                         if metric_names:
-                            end_time = datetime.now(timezone.utc)
-                            timespan = f"{(end_time - timedelta(hours=24)).isoformat()}/{end_time.isoformat()}"
+                            end_time = datetime.now(timezone.utc).replace(microsecond=0)
+                            start_time = end_time - timedelta(hours=24)
+                            # Azure Monitor's timespan parser expects UTC Z values;
+                            # Python's +00:00 offset form is rejected by ARM.
+                            timespan = (f"{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}/"
+                                        f"{end_time.strftime('%Y-%m-%dT%H:%M:%SZ')}")
+                            metric_namespace = next(
+                                (item.get("namespace") for item in definition_items if item.get("namespace")),
+                                None,
+                            )
                             metric_path = (f"{resource['id']}/providers/Microsoft.Insights/metrics"
-                                           f"?api-version=2018-01-01&metricnames={quote(','.join(metric_names))}&timespan={quote(timespan)}&interval=PT1H&aggregation=Average")
+                                           f"?api-version=2018-01-01&metricnames={quote(','.join(metric_names))}"
+                                           f"&timespan={quote(timespan)}&interval=PT1H&aggregation=Average")
+                            if metric_namespace:
+                                metric_path += f"&metricnamespace={quote(metric_namespace)}"
                             _, metric_result, _ = arm.request("GET", metric_path, timeout=30)
                             for metric in metric_result.get("value", []):
                                 points = [point for series in metric.get("timeseries", []) for point in series.get("data", [])]
@@ -559,7 +570,12 @@ def verify_tenant_resources(tenant: dict[str, Any]) -> dict[str, Any]:
                         else:
                             resource_item["metrics_state"] = "not_supported"
                     except Exception as metrics_exc:
-                        resource_item["metrics_error"] = str(metrics_exc)
+                        error_text = str(metrics_exc)
+                        if "not a supported platform metric namespace" in error_text.lower():
+                            resource_item["metrics_state"] = "not_supported"
+                        else:
+                            resource_item["metrics_state"] = "unavailable"
+                            resource_item["metrics_error"] = error_text
                     resources.append(resource_item)
                 path = page.get("nextLink")
             inventory_state = "available"
@@ -614,7 +630,16 @@ def verify_tenant_resources(tenant: dict[str, Any]) -> dict[str, Any]:
             token = arm.credential.get_token("https://api.loganalytics.io/.default").token
             from urllib.request import Request, urlopen
             query_url = f"https://api.loganalytics.azure.com/v1/workspaces/{workspace_customer_id}/query"
-            query_data = json.dumps({"query": "AzureActivity | where TimeGenerated > ago(24h) | summarize Events=count() by Category | take 20"}).encode()
+            # Activity logs appear only when diagnostic settings route them to
+            # this workspace. Container Apps logs are emitted to the custom
+            # tables below when the optional tenant workload is deployed.
+            query_data = json.dumps({"query": (
+                "union isfuzzy=true withsource=SourceTable "
+                "ContainerAppConsoleLogs_CL, ContainerAppSystemLogs_CL, AzureActivity "
+                "| where TimeGenerated > ago(24h) "
+                "| summarize Events=count() by SourceTable "
+                "| order by Events desc | take 20"
+            )}).encode()
             req = Request(query_url, data=query_data, method="POST", headers={
                 "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
             with urlopen(req, timeout=45) as response:
