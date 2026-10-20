@@ -52,6 +52,8 @@ See [`docs/proposal-alignment.md`](docs/proposal-alignment.md) for implementatio
 
 See [`docs/project-implementation-and-deployment-record.md`](docs/project-implementation-and-deployment-record.md) for the current hosted portal and sample workload deployment record, including verified Azure resources and known limitations.
 
+Captured command and service-response snapshots are in [`docs/evidence/tenant-workload-test-snapshots.md`](docs/evidence/tenant-workload-test-snapshots.md).
+
 ## Budget note
 
 The €1,000 request maximum is an Azure budget alert, not a spending cap. Azure budgets notify and report; they do not block deployments, shut down resources, or prevent charges. Actual spend can exceed an alert.
