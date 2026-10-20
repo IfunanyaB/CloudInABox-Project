@@ -168,6 +168,13 @@ class AzureArmClient:
                     self.wait_operation(status, result, headers, timeout=max(1, int(deadline - time.monotonic())))
                     break
                 except AzureArmError as exc:
+                    if (exc.method == "PUT" and exc.status_code == 429
+                            and "subscription is not created" in str(exc).lower()):
+                        raise RuntimeError(
+                            "Azure billing did not create this subscription and returned a subscription-creation "
+                            "cooldown response. This is a billing-side limit, not a tenant deployment error. "
+                            "Wait before retrying; repeated retries cannot bypass Azure's allowance."
+                        ) from exc
                     if exc.method != "PUT" or exc.status_code != 429 or attempt == 3:
                         raise
                     remaining = deadline - time.monotonic()
