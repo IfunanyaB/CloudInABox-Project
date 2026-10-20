@@ -13,6 +13,9 @@ resource subscriptionPlacementRole 'Microsoft.Authorization/roleDefinitions@2022
     permissions: [{
       actions: [
         'Microsoft.Management/managementGroups/read'
+        // Subscription alias placement requires write access on the target
+        // management group in addition to subscriptions/write.
+        'Microsoft.Management/managementGroups/write'
         'Microsoft.Management/managementGroups/subscriptions/read'
         'Microsoft.Management/managementGroups/subscriptions/write'
       ]

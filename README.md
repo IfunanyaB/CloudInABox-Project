@@ -33,7 +33,7 @@ Open <http://127.0.0.1:8000>; opening `index.html` as a `file://` URL will not s
 The hosted portal and worker require all values documented in [`.env.example`](.env.example), including:
 
 - `TENANT_BILLING_SCOPE`: full Microsoft Customer Agreement invoice-section ID that permits subscription creation.
-- `TENANT_MANAGEMENT_GROUP_ID=Tenant`: the existing tenant management group nested beneath `CloudInABox`.
+- `TENANT_MANAGEMENT_GROUP_ID=/providers/Microsoft.Management/managementGroups/Tenant`: the ARM resource ID of the existing tenant management group nested beneath `CloudInABox`.
 - `HUB_SUBSCRIPTION_ID`, `HUB_RESOURCE_GROUP`, and `HUB_VNET_NAME`: a shared hub must be deployed before tenant vending.
 - `PLATFORM_GROUP_OBJECT_ID`: Entra security group to receive Reader on each tenant subscription.
 - `AZURE_TENANT_ID`: Microsoft Entra directory ID for the tenant subscriptions.

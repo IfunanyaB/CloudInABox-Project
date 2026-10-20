@@ -13,8 +13,8 @@ param subscriptionId string
 param tenantDirectoryId string
 @description('MCA invoice section billing scope used to create tenant subscriptions.')
 param tenantBillingScope string = ''
-@description('Management group receiving new subscriptions; the existing project group ID is Tenant.')
-param tenantManagementGroupId string = 'Tenant'
+@description('ARM resource ID of the management group receiving new tenant subscriptions.')
+param tenantManagementGroupId string = '/providers/Microsoft.Management/managementGroups/Tenant'
 @description('Platform subscription that contains the shared hub network.')
 param hubSubscriptionId string = ''
 @description('Hub resource group name.')

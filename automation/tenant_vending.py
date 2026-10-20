@@ -117,7 +117,10 @@ def tenant_subscription_id(
         return existing
 
     billing_scope = os.getenv("TENANT_BILLING_SCOPE", "").strip()
-    management_group_id = os.getenv("TENANT_MANAGEMENT_GROUP_ID", "Tenant").strip()
+    management_group_id = os.getenv(
+        "TENANT_MANAGEMENT_GROUP_ID",
+        "/providers/Microsoft.Management/managementGroups/Tenant",
+    ).strip()
     subscription_owner_id = os.getenv("WORKER_PRINCIPAL_OBJECT_ID", "").strip()
     if not billing_scope:
         raise RuntimeError("Subscription vending is enabled but TENANT_BILLING_SCOPE is not configured.")
@@ -509,12 +512,17 @@ def verify_tenant_resources(tenant: dict[str, Any]) -> dict[str, Any]:
               "missing" if not workspace else {"retentionInDays": retention, "sku": ((workspace.get("properties") or {}).get("sku") or {}).get("name")},
               bool(workspace and retention == 30))
 
-    management_group_id = os.getenv("TENANT_MANAGEMENT_GROUP_ID", "Tenant").strip()
+    management_group_id = os.getenv(
+        "TENANT_MANAGEMENT_GROUP_ID",
+        "/providers/Microsoft.Management/managementGroups/Tenant",
+    ).strip()
     inherited_policy = "cib-allowed-locations"
-    management_group_policy_id = (
-        f"/providers/Microsoft.Management/managementGroups/{quote(management_group_id, safe='')}"
-        f"/providers/Microsoft.Authorization/policyAssignments/{inherited_policy}"
+    management_group_resource_id = (
+        management_group_id
+        if management_group_id.startswith("/providers/Microsoft.Management/managementGroups/")
+        else f"/providers/Microsoft.Management/managementGroups/{quote(management_group_id, safe='')}"
     )
+    management_group_policy_id = f"{management_group_resource_id}/providers/Microsoft.Authorization/policyAssignments/{inherited_policy}"
     policy = get(management_group_policy_id, "policy")
     add_check(f"Management group policy {inherited_policy}", management_group_policy_id,
               "assignment exists at the tenant management-group scope and is inherited",
