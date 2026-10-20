@@ -86,7 +86,7 @@
         <button class="nav-item active" data-page="request">Request environment</button>
         <button class="nav-item" data-page="my-environment">My environment</button>
         <button class="nav-item" data-page="services">Services</button>
-        <button class="nav-item" data-page="finops">FinOps and costs</button>
+        <button class="nav-item" id="customerFinopsNav" data-page="finops">FinOps and costs</button>
       </nav>
       <nav class="nav-group" id="adminNav" aria-label="Administrator navigation" hidden>
         <div class="nav-label">Platform administration</div>
@@ -263,6 +263,7 @@
       renderCatalog();
       $("customerMode").setAttribute("aria-pressed", String(mode === "customer"));
       $("adminMode").setAttribute("aria-pressed", String(mode === "admin"));
+      $("customerFinopsNav").hidden = mode === "admin";
       $("customerNav").hidden = mode === "admin" && !state.auth?.is_admin;
       $("adminNav").hidden = !(mode === "admin" && state.auth?.is_admin);
       const page = mode === "customer" ? "request" : state.auth?.is_admin ? "admin-dashboard" : "account";
