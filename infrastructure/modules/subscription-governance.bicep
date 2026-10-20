@@ -34,7 +34,7 @@ resource noPublicIpDefinition 'Microsoft.Authorization/policyDefinitions@2023-04
     policyType: 'Custom'
     mode: 'All'
     displayName: 'Cloud-in-a-Box: Deny Public IP Resources'
-    description: 'Blocks creation of standalone Azure Public IP resources in tenant subscriptions.'
+    description: 'Blocks creation of standalone Azure Public IP resources at the shared subscription scope.'
     metadata: { category: 'Cloud-in-a-Box Security', version: '1.0.0' }
     policyRule: {
       if: { field: 'type', equals: 'Microsoft.Network/publicIPAddresses' }
@@ -47,7 +47,7 @@ resource noPublicIpAssignment 'Microsoft.Authorization/policyAssignments@2024-04
   name: 'cib-deny-public-ip'
   properties: {
     displayName: 'Cloud-in-a-Box: Deny Public IP Resources'
-    description: 'Tenant workloads must use approved ingress and egress paths.'
+    description: 'Tenant workloads in the shared subscription must use approved ingress and egress paths. Existing public IP resources are not removed.'
     policyDefinitionId: noPublicIpDefinition.id
   }
 }
