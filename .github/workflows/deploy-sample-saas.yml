@@ -25,7 +25,6 @@ jobs:
     env:
       TENANT_ID: ${{ github.event.client_payload.tenant_id || inputs.tenant_id }}
       TENANT_SUBSCRIPTION_ID: ${{ github.event.client_payload.subscription_id || inputs.subscription_id }}
-      IMAGE: ghcr.io/${{ github.repository_owner }}/cloudinabox-sample-saas:${{ github.sha }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -37,12 +36,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Normalize image name
+        id: image
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "ref=ghcr.io/${owner}/cloudinabox-sample-saas:${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+
       - name: Build and publish tenant sample image
         uses: docker/build-push-action@v6
         with:
           context: ./sample-app
           push: true
-          tags: ${{ env.IMAGE }}
+          tags: ${{ steps.image.outputs.ref }}
 
       - name: Sign in to Azure with GitHub OIDC
         uses: azure/login@v2
@@ -61,7 +67,7 @@ jobs:
             --resource-group "rg-${TENANT_ID}-app" \
             --subscription "${TENANT_SUBSCRIPTION_ID}" \
             --template-file sample-app/app.bicep \
-            --parameters tenantId="${TENANT_ID}" location=uksouth image="${IMAGE}" \
+            --parameters tenantId="${TENANT_ID}" location=uksouth image="${{ steps.image.outputs.ref }}" \
             --query properties.outputs.applicationUrl.value -o tsv)
           echo "application_url=${APP_URL}" >> "${GITHUB_OUTPUT}"
 
