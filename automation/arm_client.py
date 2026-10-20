@@ -279,15 +279,23 @@ class AzureArmClient:
         }
         status, data, headers = self.request("PUT", path, payload, timeout=300)
         if status in {201, 202}:
-            result = self.wait_operation(status, data, headers)
-            if result.get("properties", {}).get("provisioningState", "Succeeded") != "Succeeded":
-                state_path = f"/subscriptions/{self.subscription_id}/providers/Microsoft.Resources/deployments/{deployment_name}?api-version=2022-09-01"
-                _, result, _ = self.request("GET", state_path)
-                state = result.get("properties", {}).get("provisioningState")
-                if state != "Succeeded":
-                    raise RuntimeError(f"Azure deployment ended in state {state or 'unknown'}.")
-            return result
-        return data
+            # Azure-AsyncOperation can report completion of the PUT request
+            # before nested ARM deployments finish. Poll the deployment resource
+            # itself so a failed module cannot be reported as tenant success.
+            self.wait_operation(status, data, headers)
+        state_path = f"/subscriptions/{self.subscription_id}/providers/Microsoft.Resources/deployments/{deployment_name}?api-version=2022-09-01"
+        deadline = time.monotonic() + 1800
+        while time.monotonic() < deadline:
+            _, result, _ = self.request("GET", state_path)
+            properties = result.get("properties") or {}
+            state = str(properties.get("provisioningState") or "").lower()
+            if state == "succeeded":
+                return result
+            if state in {"failed", "canceled", "cancelled"}:
+                detail = properties.get("error") or result.get("error") or result
+                raise RuntimeError(f"Azure deployment ended in state {state}: {detail}")
+            time.sleep(5)
+        raise RuntimeError(f"Azure deployment {deployment_name} did not reach a terminal state within 1800 seconds.")
 
     def list_resource_groups(self) -> list[dict[str, Any]]:
         path = f"/subscriptions/{self.subscription_id}/resourcegroups?api-version=2021-04-01"

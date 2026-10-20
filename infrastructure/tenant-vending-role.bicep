@@ -31,6 +31,7 @@ resource vendingOperatorRole 'Microsoft.Authorization/roleDefinitions@2022-04-01
         'Microsoft.Network/routeTables/read'
         'Microsoft.Network/routeTables/write'
         'Microsoft.Network/routeTables/delete'
+        'Microsoft.Network/routeTables/join/action'
         'Microsoft.OperationalInsights/workspaces/read'
         'Microsoft.OperationalInsights/workspaces/query/*/read'
         'Microsoft.OperationalInsights/workspaces/query/read'
