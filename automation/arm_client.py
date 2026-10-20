@@ -12,6 +12,42 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
+class AzureArmError(RuntimeError):
+    """ARM request failure with structured status for safe retry decisions."""
+
+    def __init__(self, method: str, status_code: int, code: str, message: str, retry_after: float | None = None):
+        self.method = method
+        self.status_code = status_code
+        self.code = code
+        self.retry_after = retry_after
+        super().__init__(f"Azure Resource Manager {method} failed ({status_code} {code}): {message}")
+
+
+def _error_message(error: dict[str, Any], fallback: str) -> tuple[str, str]:
+    """Unwrap ARM's occasionally JSON-encoded nested error messages."""
+    code = str(error.get("code") or "AzureError")
+    message = str(error.get("message") or fallback)
+    for _ in range(3):
+        # Some Azure subscription responses append their serialized error object
+        # to the human-readable message. Keep the actionable sentence only.
+        embedded_error = message.find('{"error":')
+        if embedded_error > 0:
+            message = message[:embedded_error].rstrip(" .")
+        try:
+            nested = json.loads(message)
+        except (TypeError, json.JSONDecodeError):
+            break
+        if not isinstance(nested, dict):
+            break
+        nested_error = nested.get("error") if isinstance(nested.get("error"), dict) else nested
+        code = str(nested_error.get("code") or code)
+        next_message = nested_error.get("message")
+        if not next_message or str(next_message) == message:
+            break
+        message = str(next_message)
+    return code, message
+
+
 class AzureArmClient:
     def __init__(self, subscription_id: str, credential=None):
         if credential is None:
@@ -44,8 +80,13 @@ class AzureArmClient:
             except json.JSONDecodeError:
                 data = {"error": {"message": raw.decode("utf-8", "replace")[:2000]}}
             error = data.get("error") or {}
-            detail = error.get("message") or error.get("code") or str(data)
-            raise RuntimeError(f"Azure Resource Manager {method} failed ({exc.code}): {detail}") from exc
+            code, detail = _error_message(error, str(data))
+            retry_after = None
+            try:
+                retry_after = float(exc.headers.get("Retry-After", ""))
+            except (TypeError, ValueError):
+                pass
+            raise AzureArmError(method, exc.code, code, detail, retry_after) from exc
         except URLError as exc:
             raise RuntimeError(f"Could not reach Azure Resource Manager: {exc.reason}") from exc
 
@@ -98,7 +139,15 @@ class AzureArmClient:
         """Create or resume an idempotently named subscription alias."""
         path = f"/providers/Microsoft.Subscription/aliases/{quote(alias_name, safe='')}?api-version=2021-10-01"
         existing = self.get_subscription_alias(alias_name)
-        if existing is None:
+        properties = (existing or {}).get("properties") or {}
+        state = str(properties.get("provisioningState") or properties.get("state") or "").lower()
+        subscription_id = str(properties.get("subscriptionId") or "").strip()
+        # A failed alias with no subscription is the durable result of a previous
+        # failed attempt. Re-submit the same idempotent alias on user retry rather
+        # than polling the same failure forever. Never recreate an alias that has
+        # already produced a subscription ID.
+        should_submit = existing is None or (state in {"failed", "canceled", "cancelled"} and not subscription_id)
+        if should_submit:
             body = {
                 "properties": {
                     "displayName": display_name,
@@ -112,8 +161,20 @@ class AzureArmClient:
                     },
                 },
             }
-            status, result, headers = self.request("PUT", path, body, timeout=300)
-            self.wait_operation(status, result, headers, timeout=timeout)
+            deadline = time.monotonic() + timeout
+            for attempt in range(4):
+                try:
+                    status, result, headers = self.request("PUT", path, body, timeout=300)
+                    self.wait_operation(status, result, headers, timeout=max(1, int(deadline - time.monotonic())))
+                    break
+                except AzureArmError as exc:
+                    if exc.method != "PUT" or exc.status_code != 429 or attempt == 3:
+                        raise
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise
+                    delay = exc.retry_after if exc.retry_after is not None else min(5 * (2 ** attempt), 60)
+                    time.sleep(min(max(delay, 1), remaining))
 
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
