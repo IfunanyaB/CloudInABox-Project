@@ -10,7 +10,7 @@ on:
         required: true
         type: string
       subscription_id:
-        description: Tenant subscription ID
+        description: Platform subscription ID containing the tenant resource groups
         required: true
         type: string
 
@@ -51,16 +51,16 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ env.TENANT_SUBSCRIPTION_ID }}
 
-      - name: Deploy sample workload to the tenant subscription
+      - name: Deploy sample workload to the tenant app resource group
         id: deploy
         shell: bash
         run: |
           set -euo pipefail
-          APP_URL=$(az deployment sub create \
+          APP_URL=$(az deployment group create \
             --name "cib-sample-${TENANT_ID}" \
-            --location uksouth \
+            --resource-group "rg-${TENANT_ID}-app" \
             --subscription "${TENANT_SUBSCRIPTION_ID}" \
-            --template-file sample-app/main.bicep \
+            --template-file sample-app/app.bicep \
             --parameters tenantId="${TENANT_ID}" location=uksouth image="${IMAGE}" \
             --query properties.outputs.applicationUrl.value -o tsv)
           echo "application_url=${APP_URL}" >> "${GITHUB_OUTPUT}"

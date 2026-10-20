@@ -11,10 +11,6 @@ param adminKey string
 param subscriptionId string
 @description('Microsoft Entra tenant directory ID used when vending tenant subscriptions.')
 param tenantDirectoryId string
-@description('MCA invoice section billing scope used to create tenant subscriptions.')
-param tenantBillingScope string = ''
-@description('ARM resource ID of the management group receiving new tenant subscriptions.')
-param tenantManagementGroupId string = '/providers/Microsoft.Management/managementGroups/Tenant'
 @description('Platform subscription that contains the shared hub network.')
 param hubSubscriptionId string = ''
 @description('Hub resource group name.')
@@ -25,10 +21,6 @@ param hubVnetName string = ''
 param hubFirewallPrivateIp string = ''
 @description('Set true only after a VPN gateway is deployed in the hub.')
 param hubVpnGatewayEnabled bool = false
-@description('Platform Entra security group object ID, assigned Reader in each tenant subscription.')
-param platformGroupObjectId string = ''
-@description('GitHub Actions service principal object ID, assigned Contributor in tenant subscriptions.')
-param githubActionsPrincipalObjectId string = ''
 @description('GitHub repository in owner/name form for sample workload dispatch.')
 param githubRepository string = ''
 @secure()
@@ -107,16 +99,11 @@ resource portal 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
           { name: 'SERVICE_BUS_QUEUE', value: queueName }
           { name: 'AZURE_SUBSCRIPTION_ID', value: subscriptionId }
           { name: 'AZURE_TENANT_ID', value: tenantDirectoryId }
-          { name: 'TENANT_BILLING_SCOPE', value: tenantBillingScope }
-          { name: 'TENANT_MANAGEMENT_GROUP_ID', value: tenantManagementGroupId }
-          { name: 'WORKER_PRINCIPAL_OBJECT_ID', value: worker!.identity.principalId }
           { name: 'HUB_SUBSCRIPTION_ID', value: empty(hubSubscriptionId) ? subscriptionId : hubSubscriptionId }
           { name: 'HUB_RESOURCE_GROUP', value: hubResourceGroupName }
           { name: 'HUB_VNET_NAME', value: hubVnetName }
           { name: 'HUB_FIREWALL_PRIVATE_IP', value: hubFirewallPrivateIp }
           { name: 'HUB_VPN_GATEWAY_ENABLED', value: hubVpnGatewayEnabled ? 'true' : 'false' }
-          { name: 'PLATFORM_GROUP_OBJECT_ID', value: platformGroupObjectId }
-          { name: 'GITHUB_ACTIONS_PRINCIPAL_OBJECT_ID', value: githubActionsPrincipalObjectId }
           { name: 'GITHUB_CALLBACK_SECRET', secretRef: 'github-callback-secret' }
           { name: 'GITHUB_REPOSITORY', value: githubRepository }
         ]
@@ -157,15 +144,11 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
           { name: 'SERVICE_BUS_QUEUE', value: queueName }
           { name: 'AZURE_SUBSCRIPTION_ID', value: subscriptionId }
           { name: 'AZURE_TENANT_ID', value: tenantDirectoryId }
-          { name: 'TENANT_BILLING_SCOPE', value: tenantBillingScope }
-          { name: 'TENANT_MANAGEMENT_GROUP_ID', value: tenantManagementGroupId }
           { name: 'HUB_SUBSCRIPTION_ID', value: empty(hubSubscriptionId) ? subscriptionId : hubSubscriptionId }
           { name: 'HUB_RESOURCE_GROUP', value: hubResourceGroupName }
           { name: 'HUB_VNET_NAME', value: hubVnetName }
           { name: 'HUB_FIREWALL_PRIVATE_IP', value: hubFirewallPrivateIp }
           { name: 'HUB_VPN_GATEWAY_ENABLED', value: hubVpnGatewayEnabled ? 'true' : 'false' }
-          { name: 'PLATFORM_GROUP_OBJECT_ID', value: platformGroupObjectId }
-          { name: 'GITHUB_ACTIONS_PRINCIPAL_OBJECT_ID', value: githubActionsPrincipalObjectId }
           { name: 'GITHUB_REPOSITORY', value: githubRepository }
           { name: 'MAX_REQUEST_BUDGET_EUR', value: '1000' }
         ], empty(githubActionsToken) ? [] : [{ name: 'GITHUB_ACTIONS_TOKEN', secretRef: 'github-actions-token' }])

@@ -14,6 +14,9 @@ param budgetContactEmail string
 @description('Start date for the budget period.')
 param budgetStartDate string
 
+@description('Only resource groups belonging to this tenant; prevents cross-tenant budget aggregation.')
+param resourceGroupNames array
+
 // Tenant monthly budget
 resource tenantBudget 'Microsoft.Consumption/budgets@2023-05-01' = {
   name: 'budget-${tenantId}'
@@ -22,6 +25,14 @@ resource tenantBudget 'Microsoft.Consumption/budgets@2023-05-01' = {
     amount: monthlyBudgetAmount
     category: 'Cost'
     timeGrain: 'Monthly'
+
+    filter: {
+      dimensions: {
+        name: 'ResourceGroupName'
+        operator: 'In'
+        values: resourceGroupNames
+      }
+    }
 
     timePeriod: {
       startDate: budgetStartDate

@@ -70,6 +70,7 @@ resource environmentTagPolicy 'Microsoft.Authorization/policyAssignments@2025-03
   }
 }
 
+
 output allowedLocationPolicyAssignmentId string = allowedLocationsPolicy.id
 
 output tenantIdPolicyAssignmentId string = costCentreTagPolicy.id

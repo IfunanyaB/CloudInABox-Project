@@ -15,15 +15,6 @@ param location string = 'uksouth'
 @description('Person or team responsible for the tenant.')
 param owner string = 'platform-team'
 
-@description('Object ID of the platform team entra ID group.')
-param platformGroupObjectId string = ''
-
-@description('Object ID of the tenant team Entra ID group.')
-param tenantGroupObjectId string = ''
-
-@description('Object ID of the GitHub Actions service principal used by the sample-workload OIDC deployment.')
-param githubActionsPrincipalObjectId string = ''
-
 @description('Monthly budget amount for the tenant.')
 param monthlyBudgetAmount int = 50
 
@@ -101,15 +92,6 @@ module tenantNetworking './modules/networking.bicep' = {
   }
 }
 
-module tenantSubscriptionGovernance './modules/subscription-governance.bicep' = {
-  name: 'tenant-subscription-governance-${tenantId}'
-  scope: subscription()
-  params: {
-    tenantId: tenantId
-    environment: environment
-  }
-}
-
 // Create the tenant resource groups
 module tenantResources './modules/tenant.bicep' = {
   name: 'tenant-resources-${tenantId}'
@@ -137,6 +119,35 @@ module tenantMonitoring './modules/monitoring.bicep' = {
   ]
 }
 
+// In the shared-subscription model, tenant controls are scoped to the tenant's
+// resource groups so one tenant's tags/policies cannot affect another tenant.
+module networkGovernance './modules/governance.bicep' = {
+  name: 'tenant-network-governance-${tenantId}'
+  scope: networkResourceGroup
+  params: { tenantId: tenantId, environment: environment }
+}
+
+module appGovernance './modules/governance.bicep' = {
+  name: 'tenant-app-governance-${tenantId}'
+  scope: resourceGroup('rg-${tenantId}-app')
+  params: { tenantId: tenantId, environment: environment }
+  dependsOn: [tenantResources]
+}
+
+module dataGovernance './modules/governance.bicep' = {
+  name: 'tenant-data-governance-${tenantId}'
+  scope: resourceGroup('rg-${tenantId}-data')
+  params: { tenantId: tenantId, environment: environment }
+  dependsOn: [tenantResources]
+}
+
+module monitoringGovernance './modules/governance.bicep' = {
+  name: 'tenant-monitoring-governance-${tenantId}'
+  scope: resourceGroup('rg-${tenantId}-monitoring')
+  params: { tenantId: tenantId, environment: environment }
+  dependsOn: [tenantResources]
+}
+
 
 
 // Deployment outputs
@@ -144,17 +155,6 @@ output tenantIdOutput string = tenantId
 output networkResourceGroupName string = networkResourceGroup.name
 output tenantVnetId string = tenantNetworking.outputs.vnetId
 
-// Apply tenant RBAC when group IDs are provided
-module tenantRbac './modules/rbac.bicep' = if (!empty(platformGroupObjectId) || !empty(tenantGroupObjectId) || !empty(githubActionsPrincipalObjectId)) {
-  name: 'tenant-rbac-${tenantId}'
-  scope: subscription()
-  params: {
-    platformGroupObjectId: platformGroupObjectId
-    tenantGroupObjectId: tenantGroupObjectId
-    githubActionsPrincipalObjectId: githubActionsPrincipalObjectId
-  }
-  dependsOn: [tenantResources, tenantNetworking]
-}
 
 // Configure tenant budget and FinOps controls
 module tenantFinOps './modules/finops.bicep' = {
@@ -165,6 +165,12 @@ module tenantFinOps './modules/finops.bicep' = {
     monthlyBudgetAmount: monthlyBudgetAmount
     budgetContactEmail: budgetContactEmail
     budgetStartDate: budgetStartDate
+    resourceGroupNames: [
+      'rg-${tenantId}-network'
+      'rg-${tenantId}-app'
+      'rg-${tenantId}-data'
+      'rg-${tenantId}-monitoring'
+    ]
   }
 }
 

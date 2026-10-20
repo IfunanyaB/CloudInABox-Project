@@ -24,6 +24,7 @@ from automation.tenant_vending import (
     PORTAL_ENVIRONMENT_OPTIONS,
     PORTAL_LOCATION_OPTIONS,
     deprovision_tenant,
+    platform_subscription_id,
     vend_tenant,
     verify_tenant_resources,
 )
@@ -123,7 +124,14 @@ def require_request_token(tenant: dict, request: Request) -> None:
 
 
 def public_record(tenant: dict) -> dict:
-    return {key: value for key, value in tenant.items() if key not in {"customer_subject", "request_token_hash"}}
+    record = {key: value for key, value in tenant.items() if key not in {"customer_subject", "request_token_hash"}}
+    platform_subscription = platform_subscription_id()
+    record["isolation_model"] = (
+        "shared subscription; isolated tenant resource groups"
+        if platform_subscription and tenant.get("subscription_id") == platform_subscription
+        else "dedicated subscription" if tenant.get("subscription_id") else "not provisioned"
+    )
+    return record
 
 
 def customer_request_view(tenant: dict) -> dict:
@@ -604,7 +612,7 @@ def evaluation_evidence(_: dict = Depends(require_admin)):
         "cost_currency", "cross_tenant_cost_isolation_test", "sample_workload_state",
         "sample_workload_run_url",
     ])
-    platform_subscription = os.getenv("AZURE_SUBSCRIPTION_ID", "").strip()
+    platform_subscription = platform_subscription_id()
     for tenant in list_records():
         with db_session() as connection:
             events = db_execute(connection,
@@ -626,7 +634,7 @@ def evaluation_evidence(_: dict = Depends(require_admin)):
         cost = report.get("cost") or {}
         writer.writerow([
             tenant.get("tenant_id"), tenant.get("tenant_name"), tenant.get("subscription_id"),
-            "legacy shared subscription" if platform_subscription and tenant.get("subscription_id") == platform_subscription else "dedicated subscription" if tenant.get("subscription_id") else "not provisioned",
+            "shared subscription; isolated tenant resource groups" if platform_subscription and tenant.get("subscription_id") == platform_subscription else "legacy dedicated subscription" if tenant.get("subscription_id") else "not provisioned",
             tenant.get("status"), started or "", completion or "", duration_seconds, "",
             sum(bool(check.get("passed")) for check in policy_checks) if report else "",
             len(policy_checks) if report else "",
@@ -691,14 +699,24 @@ def assign_tenant_access(
         raise HTTPException(status_code=409, detail="Tenant access can be assigned after its subscription is provisioned.")
     from automation.arm_client import AzureArmClient
     try:
-        AzureArmClient(tenant["subscription_id"]).assign_subscription_role(
-            request.tenant_group_object_id,
-            "b24988ac-6180-42a0-ab88-20f7382dd24c",
-        )
+        arm = AzureArmClient(tenant["subscription_id"])
+        shared_subscription_id = platform_subscription_id()
+        role_id = "b24988ac-6180-42a0-ab88-20f7382dd24c"
+        if shared_subscription_id and tenant["subscription_id"] == shared_subscription_id:
+            raise HTTPException(
+                status_code=409,
+                detail=("The hosted worker intentionally cannot manage Azure role assignments at subscription scope. "
+                        "For a shared-subscription tenant, assign the customer group only to this tenant's four "
+                        "resource groups using a subscription Owner; no Azure role changes were made."),
+            )
+        else:
+            arm.assign_subscription_role(request.tenant_group_object_id, role_id)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Azure could not assign tenant Contributor access: {exc}") from exc
     store_record({**tenant, "tenant_group_object_id": request.tenant_group_object_id})
-    append_history(tenant_id, tenant["status"], "access", "Tenant Entra group granted Contributor access at its subscription scope.")
+    append_history(tenant_id, tenant["status"], "access", "Tenant Entra group Contributor access was assigned at the tenant isolation scope.")
     return public_record(get_record(tenant_id))
 
 
