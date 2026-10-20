@@ -60,6 +60,17 @@
     .trend-chart .trend-point{fill:#4d8058;stroke:#fff;stroke-width:2}
     .finops-detail .resource-list li small{color:var(--muted)}
     @media(max-width:850px){aside{position:static;height:auto;overflow:visible}.side-note{display:none}}
+    /* Keep the interface readable without making every label compete for attention. */
+    body{font-weight:400}
+    h1,h2,h3,h4,strong,b{font-weight:500}
+    .brand-mark{font-weight:600}
+    .top-title,.portal-switch button,.nav-label,.eyebrow,.metric-label,.table th,.detail-key,.field label,.btn,.status-pill,.tenant-link{font-weight:500}
+    .metric-value,.finops-detail .metric-value{font-weight:550}
+    .tenant-summary-copy strong{font-weight:400}
+    .tenant-summary-metrics{font-weight:400}
+    .tenant-summary-metrics .status-pill{font-weight:500}
+    .tenant-state-line{display:flex;align-items:center;gap:10px;margin-top:14px;color:var(--muted);font-size:12px}
+    .finops-detail h3,.tenant-dialog-head h2{font-weight:500}
   </style>
 </head>
 <body>
@@ -122,7 +133,7 @@
       </section>
 
       <section class="page" id="page-finops">
-        <div class="page-head"><div><div class="eyebrow">FinOps</div><h1>Budget and costs</h1><p class="lead">Budget alerts and measured Azure costs for your tracked environment.</p></div></div>
+        <div class="page-head"><div><div class="eyebrow">FinOps</div><h1>Budget and costs</h1></div></div>
         <div id="customerFinops"></div>
       </section>
 
@@ -352,7 +363,8 @@
     }
     function renderFinops() {
       const adminView = state.mode === "admin" && state.auth?.is_admin;
-      const mine = adminView ? state.tenants : state.publicRequests;
+      const records = adminView ? state.tenants : state.publicRequests;
+      const mine = records.filter(t => !["failed","deprovision_failed"].includes(t.status));
       $("customerFinops").innerHTML = mine.length ? mine.map(t => {
         const cost=t.verification_report?.cost, currency=cost?.currency||"EUR", budget=Number(t.monthly_budget||0), spent=Number(cost?.month_to_date||0);
         const utilization=budget>0&&cost?.state==="available"?spent/budget*100:null;
@@ -361,8 +373,8 @@
         const monitoring=finopsEnvironmentMarkup(t);
         const admin=Boolean(adminView);
         const reportButton=admin?`<button class="btn secondary" data-tenant-report="${escapeHtml(t.tenant_id)}">Download tenant report</button>`:"";
-        return `<details class="card finops-tenant"><summary><span class="tenant-summary-copy"><strong>${escapeHtml(t.tenant_name||t.tenant_id)}</strong><small>${escapeHtml(t.tenant_id)} · ${escapeHtml(t.location||"Region not recorded")}</small></span><span class="tenant-summary-metrics">${statusPill(t.status)}<small>Alert ${formatMoney(t.monthly_budget)}</small>${cost?.state==="available"?`<small>Spend ${formatCost(spent,currency)}</small>`:""}</span></summary><div class="finops-detail"><div class="toolbar" style="justify-content:flex-end;margin-top:14px">${reportButton}${t.status==="success"?`<button class="btn secondary" data-snapshot-refresh="${escapeHtml(t.tenant_id)}">Refresh Azure data</button>`:""}</div><div class="grid metrics" style="margin-top:16px"><div class="metric"><div class="metric-label">Monthly alert</div><div class="metric-value">${formatMoney(t.monthly_budget)}</div></div><div class="metric"><div class="metric-label">Measured spend</div><div class="metric-value">${cost?.state==="available"?formatCost(spent,currency):"—"}</div></div><div class="metric"><div class="metric-label">Budget remaining</div><div class="metric-value">${cost?.state==="available"?formatCost(budget-spent,currency):"—"}</div></div><div class="metric"><div class="metric-label">Utilisation</div><div class="metric-value">${utilization==null?"—":`${utilization.toFixed(1)}%`}</div></div></div>${utilization!=null?`<div class="budget-track"><span style="width:${Math.min(100,Math.max(0,utilization))}%"></span></div>`:""}<h3>Measured Azure cost over time</h3>${costTrendChart(daily,currency)}${cost?.error?`<p class="footer-note">Cost Management could not return data for this tenant.</p>`:""}<p class="footer-note">The budget is an alert threshold, not a spending cap. Cost values are shown only when Azure Cost Management returns them.</p>${monitoring}</div></details>`;
-      }).join("") : `<div class="empty">No tracked tenant budget is available in this session. Submit or track a request to view its budget.</div>`;
+        return `<details class="card finops-tenant"><summary><span class="tenant-summary-copy"><strong>${escapeHtml(t.tenant_name||t.tenant_id)}</strong><small>${escapeHtml(t.tenant_id)} · ${escapeHtml(t.location||"Region not recorded")}</small></span></summary><div class="finops-detail"><div class="tenant-state-line">${statusPill(t.status)}</div><div class="toolbar" style="justify-content:flex-end;margin-top:14px">${reportButton}${t.status==="success"?`<button class="btn secondary" data-snapshot-refresh="${escapeHtml(t.tenant_id)}">Refresh Azure data</button>`:""}</div><div class="grid metrics" style="margin-top:16px"><div class="metric"><div class="metric-label">Monthly alert</div><div class="metric-value">${formatMoney(t.monthly_budget)}</div></div><div class="metric"><div class="metric-label">Measured spend</div><div class="metric-value">${cost?.state==="available"?formatCost(spent,currency):"—"}</div></div><div class="metric"><div class="metric-label">Budget remaining</div><div class="metric-value">${cost?.state==="available"?formatCost(budget-spent,currency):"—"}</div></div><div class="metric"><div class="metric-label">Utilisation</div><div class="metric-value">${utilization==null?"—":`${utilization.toFixed(1)}%`}</div></div></div>${utilization!=null?`<div class="budget-track"><span style="width:${Math.min(100,Math.max(0,utilization))}%"></span></div>`:""}<h3>Measured Azure cost over time</h3>${costTrendChart(daily,currency)}${cost?.error?`<p class="footer-note">Cost Management could not return data for this tenant.</p>`:""}<p class="footer-note">The budget is an alert threshold, not a spending cap. Cost values are shown only when Azure Cost Management returns them.</p>${monitoring}</div></details>`;
+      }).join("") : `<div class="empty">${adminView?"No active or completed tenant records are available in FinOps.":"No tracked tenant budget is available in this session. Submit or track a request to view its budget."}</div>`;
       $("customerFinops").querySelectorAll("[data-tenant-report]").forEach(button=>button.addEventListener("click",()=>downloadTenantReport(button.dataset.tenantReport,button)));
       $("customerFinops").querySelectorAll("[data-snapshot-refresh]").forEach(button=>button.addEventListener("click",()=>{
         const tenant=mine.find(item=>item.tenant_id===button.dataset.snapshotRefresh);
