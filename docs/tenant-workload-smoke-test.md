@@ -8,12 +8,12 @@ The repository includes an optional sample SaaS app and GitHub Actions workflow.
 
 ## One-time setup for the sample workflow
 
-1. In Azure, create or use a service principal backed by an app registration with a federated identity credential for this GitHub repository and the branch you will run from. Use issuer `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`, and subject `repo:IfunanyaB/FinalYearProject:ref:refs/heads/main` (adjust the owner/repository/branch if they differ). No client secret is needed for GitHub OIDC.
+1. In Azure, create or use a service principal backed by an app registration with a federated identity credential for this GitHub repository and branch. Use issuer `https://token.actions.githubusercontent.com` and audience `api://AzureADTokenExchange`. Match the credential subject to the `sub` claim actually issued by GitHub Actions. For this repository's current main-branch run, the claim was `repo:IfunanyaB@162316107/FinalYearProject@1414751751:ref:refs/heads/main`; GitHub may use immutable owner/repository IDs in this claim.
 2. Add GitHub Actions repository secrets `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` for that app registration and directory.
 3. Grant its service principal permissions only on this tenant's groups:
    - `Contributor` on `rg-{tenant}-app` so the workflow can deploy the Container Apps environment and app.
    - `Network Contributor` on `rg-{tenant}-network` so Container Apps can read and join the delegated `snet-app` subnet.
-   - A small custom role on `rg-{tenant}-monitoring` with `Microsoft.OperationalInsights/workspaces/read` and `Microsoft.OperationalInsights/workspaces/sharedKeys/action`, which the Bicep deployment uses to configure Container Apps log forwarding. This scope is specific to the tenant workspace.
+   - A small custom role on `rg-{tenant}-monitoring` with `Microsoft.OperationalInsights/workspaces/read`, `Microsoft.OperationalInsights/workspaces/sharedKeys/action`, and `Microsoft.OperationalInsights/workspaces/listKeys/action`, which the Bicep deployment uses to configure Container Apps log forwarding. This scope is specific to the tenant workspace.
 4. Run the workflow once from **Actions → Deploy sample SaaS workload → Run workflow**. GitHub may first require approval to publish the `cloudinabox-sample-saas` package. Make that GHCR package public so the new Container App can pull the image without a registry credential.
 5. To have the portal automatically record the app URL and GitHub run link, add repository variable `PORTAL_API_URL` with the hosted portal's base URL and repository secret `GITHUB_CALLBACK_SECRET` matching the worker's configured callback secret. The signed callback never uses or exposes the administrator key. Without these callback settings, the workflow can still deploy the app, but the portal will not show its result.
 

@@ -50,6 +50,8 @@ Each tenant request creates four resource groups and tenant-specific resources i
 
 See [`docs/proposal-alignment.md`](docs/proposal-alignment.md) for implementation status and [`docs/usability-study-protocol.md`](docs/usability-study-protocol.md) for the evaluation protocol. `/admin/evaluation/evidence.csv` exports observed request and Azure verification measurements; it leaves unmeasured study findings blank.
 
+See [`docs/project-implementation-and-deployment-record.md`](docs/project-implementation-and-deployment-record.md) for the current hosted portal and sample workload deployment record, including verified Azure resources and known limitations.
+
 ## Budget note
 
 The €1,000 request maximum is an Azure budget alert, not a spending cap. Azure budgets notify and report; they do not block deployments, shut down resources, or prevent charges. Actual spend can exceed an alert.
