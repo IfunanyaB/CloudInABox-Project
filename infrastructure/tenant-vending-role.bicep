@@ -28,6 +28,7 @@ resource vendingOperatorRole 'Microsoft.Authorization/roleDefinitions@2022-04-01
         'Microsoft.Network/virtualNetworks/virtualNetworkPeerings/read'
         'Microsoft.Network/virtualNetworks/virtualNetworkPeerings/write'
         'Microsoft.Network/virtualNetworks/virtualNetworkPeerings/delete'
+        'Microsoft.Network/virtualNetworks/peer/action'
         'Microsoft.Network/routeTables/read'
         'Microsoft.Network/routeTables/write'
         'Microsoft.Network/routeTables/delete'
