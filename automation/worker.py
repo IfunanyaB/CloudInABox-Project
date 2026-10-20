@@ -12,7 +12,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from azure.identity import DefaultAzureCredential
-from azure.servicebus import ServiceBusClient
+from azure.servicebus import AutoLockRenewer, ServiceBusClient
 
 from automation.api import (
     append_history,
@@ -134,18 +134,40 @@ def main() -> None:
     credential = DefaultAzureCredential()
     try:
         with ServiceBusClient(namespace, credential=credential) as client:
-            with client.get_queue_receiver(queue_name, max_wait_time=10) as receiver:
+            with client.get_queue_receiver(queue_name, max_wait_time=10) as receiver, AutoLockRenewer(
+                max_lock_renewal_duration=3600
+            ) as lock_renewer:
                 while True:
                     messages = receiver.receive_messages(max_message_count=1, max_wait_time=10)
                     if not messages:
                         continue
                     for message in messages:
                         try:
+                            lock_renewer.register(
+                                receiver, message, max_lock_renewal_duration=3600
+                            )
                             payload = json.loads(b"".join(message.body).decode("utf-8"))
+                            print(
+                                f"Processing tenant job action={payload.get('action')} "
+                                f"tenant_id={payload.get('tenant_id')}",
+                                flush=True,
+                            )
                             handle_job(payload)
                             receiver.complete_message(message)
-                        except Exception:
-                            receiver.abandon_message(message)
+                            print(
+                                f"Completed tenant job action={payload.get('action')} "
+                                f"tenant_id={payload.get('tenant_id')}",
+                                flush=True,
+                            )
+                        except Exception as exc:
+                            print(f"Tenant job failed: {type(exc).__name__}: {exc}", flush=True)
+                            try:
+                                receiver.abandon_message(message)
+                            except Exception as lock_exc:
+                                print(
+                                    f"Could not abandon tenant job: {type(lock_exc).__name__}: {lock_exc}",
+                                    flush=True,
+                                )
                             time.sleep(2)
     finally:
         credential.close()
