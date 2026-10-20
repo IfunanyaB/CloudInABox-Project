@@ -18,6 +18,7 @@ resource subscriptionPlacementRole 'Microsoft.Authorization/roleDefinitions@2022
         'Microsoft.Management/managementGroups/write'
         'Microsoft.Management/managementGroups/subscriptions/read'
         'Microsoft.Management/managementGroups/subscriptions/write'
+        'Microsoft.Authorization/policyAssignments/read'
       ]
       notActions: []
     }]

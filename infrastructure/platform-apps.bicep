@@ -184,6 +184,15 @@ resource busSend 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (depl
     principalType: 'ServicePrincipal'
   }
 }
+resource workerBusSend 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployApps) {
+  name: guid(serviceBus.id, 'cloudinabox-worker', 'ServiceBusDataSender')
+  scope: serviceBus
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39')
+    principalId: worker!.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
 resource busReceive 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployApps) {
   name: guid(serviceBus.id, 'cloudinabox-worker', 'ServiceBusDataReceiver')
   scope: serviceBus
