@@ -15,6 +15,9 @@ var tags = {
   CostCentre: tenantId
   ManagedBy: 'github-actions'
 }
+// Container Apps names are limited to 32 characters; resource group IDs give
+// each tenant deployment a stable, collision-resistant suffix.
+var sampleAppName = 'saas-${uniqueString(resourceGroup().id)}'
 
 resource tenantVnet 'Microsoft.Network/virtualNetworks@2025-07-01' existing = {
   scope: resourceGroup(subscription().subscriptionId, 'rg-${tenantId}-network')
@@ -46,7 +49,7 @@ resource containerEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
 }
 
 resource sampleApp 'Microsoft.App/containerApps@2024-03-01' = {
-  name: 'sample-saas-${tenantId}'
+  name: sampleAppName
   location: location
   tags: tags
   properties: {
